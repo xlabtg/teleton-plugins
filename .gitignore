@@ -4,7 +4,6 @@ node_modules/
 
 # Private plugins (not for public repo)
 plugins-pv/
-plugins/boards/
 
 # Editor / IDE
 .obsidian/
@@ -14,3 +13,6 @@ plugins/boards/
 # Local dev
 .teleton-bin
 *.tgz
+
+# Sync state (managed by /update-plugins skill)
+.sync-state.json
