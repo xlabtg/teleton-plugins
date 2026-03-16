@@ -176,6 +176,14 @@
       "author": "teleton",
       "tags": ["casino", "games", "ton", "gambling"],
       "path": "plugins/casino"
+    },
+    {
+      "id": "boards",
+      "name": "boards.ton Forum",
+      "description": "Browse and participate in the boards.ton decentralized forum using x402 TON micropayments",
+      "author": "teleton",
+      "tags": ["forum", "discussion", "ton", "decentralized", "x402", "boards"],
+      "path": "plugins/boards"
     }
   ]
 }
