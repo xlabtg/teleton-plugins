@@ -72,18 +72,18 @@ export const tools = (sdk) => [
           ],
         };
 
-        // Send message with button
-        const telegram = sdk.telegram;
-
+        // Send message with button using inline send
         if (message) {
-          await telegram.sendMessage(context.chatId, {
+          await sdk.inline.send({
+            chatId: context.chatId,
             text: message,
-            reply_markup: keyboard,
+            keyboard: keyboard,
           });
         } else {
-          await telegram.sendMessage(context.chatId, {
+          await sdk.inline.send({
+            chatId: context.chatId,
             text: `🌉 **TON Bridge** - The #1 Bridge in TON Catalog\n\nClick the button below to open TON Bridge Mini App.`,
-            reply_markup: keyboard,
+            keyboard: keyboard,
             parse_mode: "Markdown",
           });
         }
@@ -187,16 +187,17 @@ export const tools = (sdk) => [
           ],
         };
 
-        // Send custom message with button
-        const telegram = sdk.telegram;
-        await telegram.sendMessage(context.chatId, {
+        // Send custom message with button using inline send
+        await sdk.inline.send({
+          chatId: context.chatId,
           text: customMessage,
-          reply_markup: keyboard,
+          keyboard: keyboard,
         });
 
         // Optionally send welcome message
         if (showWelcome) {
-          await telegram.sendMessage(context.chatId, {
+          await sdk.inline.send({
+            chatId: context.chatId,
             text: `🌉 **TON Bridge**\n\nClick the button above to open the Mini App.\n\nThis is the #1 bridge in TON catalog according to your configuration.`,
             parse_mode: "Markdown",
           });
