@@ -141,6 +141,13 @@ async function getWalletAndClient() {
 
 // ── Export -- SDK wrapper ────────────────────────────────────────────────
 
+export const manifest = {
+  name: "sbt",
+  version: "2.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Deploy and mint Soulbound Tokens (TEP-85) on TON — non-transferable NFTs permanently bound to their owners.",
+};
+
 export const tools = (sdk) => {
 
 // ── 1. sbt_deploy_collection ─────────────────────────────────────────────
@@ -150,6 +157,7 @@ const sbtDeployCollection = {
   description:
     "Deploy a new SBT (Soulbound Token) collection on TON. Creates the collection contract from the agent's wallet. Returns the collection address for minting items. Cost: ~0.05 TON.",
   category: "action",
+  scope: "admin-only",
   parameters: {
     type: "object",
     required: ["name", "description", "image"],
@@ -233,6 +241,7 @@ const sbtMint = {
   description:
     "Mint a new SBT (Soulbound Token) item in an existing collection. The SBT is non-transferable and permanently bound to the owner. Optionally set an authority address that can revoke it. Cost: ~0.1 TON.",
   category: "action",
+  scope: "admin-only",
   parameters: {
     type: "object",
     required: ["collection_address", "owner_address", "name"],

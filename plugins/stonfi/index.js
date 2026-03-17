@@ -126,6 +126,7 @@ const stonfiSearch = {
   description:
     "Search tokens on StonFi DEX by name, symbol, or contract address. Returns matching tokens with price and metadata.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -192,6 +193,7 @@ const stonfiPrice = {
   description:
     "Get the current USD price for a token on StonFi. Use the TON address EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c for native TON.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -238,6 +240,7 @@ const stonfiPools = {
   description:
     "Search and list liquidity pools on StonFi. Returns pool addresses, token pairs, reserves, APY, and volume.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -341,6 +344,7 @@ const stonfiPoolInfo = {
   description:
     "Get detailed info for a specific StonFi liquidity pool including reserves, fees, APY, and volume.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -397,6 +401,7 @@ const stonfiFarms = {
   description:
     "List active farming opportunities on StonFi. Optionally filter by pool address.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -452,6 +457,7 @@ const stonfiDexStats = {
   description:
     "Get overall StonFi DEX statistics including TVL, total volume, unique wallets, and trade count.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -496,6 +502,7 @@ const stonfiSwapQuote = {
   description:
     "Get a swap quote on StonFi -- simulates a swap between two tokens and returns expected output, price impact, fees, and gas estimate. Use TON address EQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAM9c for native TON.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -595,6 +602,7 @@ const stonfiSwap = {
   description:
     "Execute a token swap on StonFi DEX. Simulates the swap via @ston-fi/api, builds the transaction via @ston-fi/sdk, and signs with the agent wallet. Call stonfi_swap_quote first to preview.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -751,6 +759,13 @@ const stonfiSwap = {
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "stonfi",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "StonFi DEX on TON — search tokens, check prices, browse pools/farms, get swap quotes, and execute swaps.",
+};
 
 export const tools = (sdk) => {
   _sdk = sdk;

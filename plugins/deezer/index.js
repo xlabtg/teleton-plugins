@@ -17,6 +17,13 @@ const { Api } = _require("telegram");
 // Export
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "deezer",
+  version: "1.0.1",
+  sdkVersion: ">=1.0.0",
+  description: "Search and send music tracks in chat via Telegram's @DeezerMusicBot inline bot.",
+};
+
 export const tools = (sdk) => [
   {
     name: "deezer",
@@ -24,7 +31,8 @@ export const tools = (sdk) => [
       "Search and send a music track in the current chat using Telegram's @DeezerMusicBot inline bot (Deezer). " +
       "Provide a search query (artist, song title, album) and optionally pick a result by index. " +
       "The track is sent directly into the chat via @DeezerMusicBot.",
-    category: "data-bearing",
+    category: "action",
+    scope: "always",
 
     parameters: {
       type: "object",
@@ -93,7 +101,7 @@ export const tools = (sdk) => [
           },
         };
       } catch (err) {
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },

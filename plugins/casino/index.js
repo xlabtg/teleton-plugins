@@ -354,6 +354,7 @@ Returns: wallet address, balance, max bet (${config.maxBetPercent}% of bankroll)
 IMPORTANT: When a player wants to bet, tell them to send TON to the casino address with their username as memo.
 Example: "Send 2 TON to EQxxx with memo: john_doe"`,
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {},
@@ -435,6 +436,7 @@ Process: validates bet → verifies TON payment with username as memo → sends 
 
 Tell the user: "Send X TON to [casino_address] with memo: your_username"`,
       category: "action",
+      scope: "admin-only",
       parameters: {
         type: "object",
         properties: {
@@ -480,6 +482,7 @@ Same security as slots: validates bet → verifies TON payment → 🎲 animatio
 
 Tell the user: "Send X TON to [casino_address] with memo: your_username"`,
       category: "action",
+      scope: "admin-only",
       parameters: {
         type: "object",
         properties: {
@@ -517,6 +520,7 @@ Tell the user: "Send X TON to [casino_address] with memo: your_username"`,
 
 Returns: total bets, wins/losses, total wagered, total won, net P&L, win rate, last bet date.`,
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {},

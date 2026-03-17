@@ -17,13 +17,21 @@ const { Api } = _require("telegram");
 // Export
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "pic",
+  version: "1.0.1",
+  sdkVersion: ">=1.0.0",
+  description: "Search and send images in chat via Telegram's @pic inline bot (Yandex Image Search).",
+};
+
 export const tools = (sdk) => [
   {
     name: "pic",
     description:
       "Search and send an image in the current chat using Telegram's @pic inline bot (Yandex Image Search). " +
       "Provide a search query and optionally pick a result by index. The image is sent directly into the chat via @pic.",
-    category: "data-bearing",
+    category: "action",
+    scope: "always",
 
     parameters: {
       type: "object",
@@ -92,7 +100,7 @@ export const tools = (sdk) => [
           },
         };
       } catch (err) {
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },

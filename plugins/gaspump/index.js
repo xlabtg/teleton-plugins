@@ -108,6 +108,7 @@ const gasLaunchToken = {
   description:
     "Launch a new token on Gas111 in one step. Logs in, uploads the image, deploys the contract on-chain from the agent's wallet, and registers on the API. Provide name, ticker, and image (base64 or URL). Returns the token address.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -240,6 +241,7 @@ const gasTokenInfo = {
   description:
     "Get full details on a token: name, ticker, market cap, status, holders count, liquidity progress, deployed date, and social links.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -270,6 +272,7 @@ const gasTokenSearch = {
   description:
     "Search and list tokens. Sort by market cap, volume, or creation date. Filter by name, creator, or audio tokens.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -316,6 +319,7 @@ const gasUserTokens = {
   name: "gas_user_tokens",
   description: "List all tokens created by a specific user.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -352,6 +356,7 @@ const gasTokenStats = {
   description:
     "Get trading statistics for a token: volume, number of trades, and other metrics.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -382,6 +387,7 @@ const gasUpdateToken = {
   description:
     "Update social links on an existing token (Telegram channel, chat, Twitter, website). Auth is automatic.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -422,6 +428,7 @@ const gasBuy = {
   description:
     "Buy tokens on a GasPump bonding curve. Sends TON to the token contract.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -460,6 +467,7 @@ const gasSell = {
   description:
     "Sell tokens back to the GasPump bonding curve. Transfers jettons to get TON back.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -499,6 +507,7 @@ const gasPortfolio = {
   description:
     "Get the agent's token portfolio: balances, prices, and total value.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -528,6 +537,7 @@ const gasHolders = {
   description:
     "List token holders with balances and developer info.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -559,6 +569,7 @@ const gasTopTraders = {
   description:
     "Top traders for a token: PnL, buy/sell volume, transaction count.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -590,6 +601,7 @@ const gasPriceChart = {
   description:
     "Price history chart data for a token. Returns timestamp/price pairs.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -620,6 +632,7 @@ const gasKing = {
   description:
     "Get the current 'King of the Hill' token on Gas111.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",

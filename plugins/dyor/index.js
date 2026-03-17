@@ -132,6 +132,13 @@ const TX_TYPE_MAP = {
 // Export -- SDK wrapper
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "dyor",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "TON token analytics from DYOR.io -- search, price, trust score, metrics, DEX trades, holders, pools",
+};
+
 export const tools = (sdk) => {
 
 // ---------------------------------------------------------------------------
@@ -143,6 +150,7 @@ const dyorSearch = {
   description:
     "Search TON jettons by name or symbol on DYOR.io. Use when the user wants to find a token by keyword. Requires at least 3 characters. Returns address, name, symbol, price, trust score, holders, FDMC, and verification status.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -202,6 +210,7 @@ const dyorDetails = {
   description:
     "Get full details for a TON jetton by its contract address on DYOR.io. Returns metadata (name, symbol, decimals, image, description, links, creation date), admin address, total supply, mintability, verification status, prices in TON and USD, holders, liquidity, FDMC, market cap, trust score, and circulating supply.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -234,6 +243,7 @@ const dyorTrustScore = {
   description:
     "Get the DYOR.io trust score for a TON jetton. Use to quickly assess token legitimacy. Returns a score from 0-100 and the last update time.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -273,6 +283,7 @@ const dyorPrice = {
   description:
     "Get the current price of a TON jetton in TON, USD, and an optional currency. Use when the user needs the latest price for a specific token address.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -318,6 +329,7 @@ const dyorPriceChart = {
   description:
     "Get price chart data points for a TON jetton over time. Supports different resolutions: min1 (max 24h), min15 (max 7d), hour1 (max 30d), day1 (max 365d). Use for price trend analysis and charting.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -376,6 +388,7 @@ const dyorMetrics = {
   description:
     "Get consolidated metrics for a TON jetton: price (TON/USD), holders, liquidity, FDMC, market cap, circulating supply, and trust score. Use for a quick overview of key token metrics.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -414,6 +427,7 @@ const dyorStats = {
   description:
     "Get percentage change statistics for a TON jetton: price changes, volume, traders, and transactions broken down by hour, 6h, day, week, and month. Use to analyze token momentum and trends.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -446,6 +460,7 @@ const dyorHolders = {
   description:
     "Get holder data for a TON jetton. By default returns the current holder count. Set history=true to get holder count over time (ticks). Use to track holder growth or check current holder numbers.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -500,6 +515,7 @@ const dyorTransactions = {
   description:
     "Get recent DEX transactions for a TON jetton. Supports filtering by transaction type (buy/sell/liquidity_deposit/liquidity_withdraw), exchange (dedust/stonfi/tonco), and wallet address. Use to analyze trading activity.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -558,6 +574,7 @@ const dyorMarkets = {
   description:
     "Get DEX pool/market data for a TON jetton. Returns available trading pools with liquidity, prices, and counterpart tokens. Optionally filter by exchange (dedust/stonfi/tonco).",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -604,6 +621,7 @@ const dyorTrending = {
   description:
     "Get trending TON jettons sorted by a chosen metric. Use to discover top tokens by volume, price change, holders, trust score, or market cap. Does NOT search by name -- use dyor_search for that.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",

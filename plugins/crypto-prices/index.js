@@ -42,12 +42,20 @@ function resolveSymbol(input) {
   return POPULAR[lower] ?? input.toUpperCase();
 }
 
+export const manifest = {
+  name: "crypto-prices",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Live cryptocurrency prices and comparisons via CryptoCompare.",
+};
+
 export const tools = (sdk) => [
   {
     name: "crypto_price",
     description:
       "Get current cryptocurrency price in USD and RUB with 24h change. Supports BTC, ETH, TON, SOL, DOGE, XRP, BNB, ADA, and 5000+ other coins. Accepts names in Russian too (биткоин, эфир, тон).",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -113,6 +121,7 @@ export const tools = (sdk) => [
     description:
       "Compare prices of multiple cryptocurrencies side by side. Up to 5 coins at once.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {

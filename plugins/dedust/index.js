@@ -155,6 +155,7 @@ const dedustAssets = {
   description:
     "Search or list tokens available on DeDust by symbol name or address. Returns token metadata including address, name, symbol, decimals, image, and type.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -227,6 +228,7 @@ const dedustPools = {
   description:
     "List top DeDust liquidity pools sorted by reserves, volume, or fees. Optionally filter by token symbol or address.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -376,6 +378,7 @@ const dedustPoolTrades = {
   description:
     "Get recent trades for a specific DeDust pool by its address.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -448,6 +451,7 @@ const dedustPoolInfo = {
   description:
     "Get detailed info for a specific DeDust pool including metadata, reserves, volume, fees, and trade fee.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -545,6 +549,7 @@ const dedustJettonInfo = {
   description:
     "Get jetton (token) metadata, top holders, and top traders from DeDust.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -616,6 +621,7 @@ const dedustPrices = {
   description:
     'Get prices and liquidity data for tokens from DeDust CoinGecko tickers. Use token addresses or "native" for TON.',
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -705,6 +711,7 @@ const dedustSwapEstimate = {
   description:
     'Estimate swap output on DeDust using on-chain pool get-methods. Returns expected output amount and trade fee. Use "native" for TON or a jetton address.',
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -825,6 +832,7 @@ const dedustSwap = {
   description:
     'Execute a swap on DeDust from the agent wallet. Supports TON->Jetton and Jetton->TON swaps. Use "native" for TON. Call dedust_swap_estimate first to preview the output.',
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -1011,6 +1019,13 @@ const dedustSwap = {
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "dedust",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "DeDust DEX on TON — browse pools, search assets, view trades, get prices, and execute on-chain swaps.",
+};
 
 export const tools = (sdk) => {
   _sdk = sdk;

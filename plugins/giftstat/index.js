@@ -48,6 +48,7 @@ function makePaginatedTool(name, description, path, sdk) {
     name,
     description,
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: { ...paginationProps },
@@ -61,7 +62,7 @@ function makePaginatedTool(name, description, path, sdk) {
         return { success: true, data: result };
       } catch (err) {
         sdk.log.error(`${name}:`, err.message);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   };
@@ -70,6 +71,13 @@ function makePaginatedTool(name, description, path, sdk) {
 // ---------------------------------------------------------------------------
 // Export -- SDK wrapper
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "giftstat",
+  version: "1.0.1",
+  sdkVersion: ">=1.0.0",
+  description: "Telegram gift market data -- collections, floor prices, models, stats, history",
+};
 
 export const tools = (sdk) => {
 
@@ -83,6 +91,7 @@ const giftCollections = {
   description:
     "List all Telegram gift collections with supply, pricing, and mint data. Use to browse available collections or check if a collection is sold out.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -105,7 +114,7 @@ const giftCollections = {
       return { success: true, data: result };
     } catch (err) {
       sdk.log.error("gift_collections:", err.message);
-      return { success: false, error: err.message };
+      return { success: false, error: String(err.message || err).slice(0, 500) };
     }
   },
 };
@@ -120,6 +129,7 @@ const giftFloorPrices = {
   description:
     "Get current floor prices for gift collections on a specific marketplace. Supports portals, tonnel, fragment, and getgems.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -143,7 +153,7 @@ const giftFloorPrices = {
       return { success: true, data: result };
     } catch (err) {
       sdk.log.error("gift_floor_prices:", err.message);
-      return { success: false, error: err.message };
+      return { success: false, error: String(err.message || err).slice(0, 500) };
     }
   },
 };
@@ -217,6 +227,7 @@ const giftThematics = {
   name: "gift_thematics",
   description: "List all thematic gift categories.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -229,7 +240,7 @@ const giftThematics = {
       return { success: true, data: result };
     } catch (err) {
       sdk.log.error("gift_thematics:", err.message);
-      return { success: false, error: err.message };
+      return { success: false, error: String(err.message || err).slice(0, 500) };
     }
   },
 };
@@ -255,6 +266,7 @@ const giftTonRate = {
   name: "gift_ton_rate",
   description: "Get the current TON to USDT exchange rate.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -267,7 +279,7 @@ const giftTonRate = {
       return { success: true, data: result };
     } catch (err) {
       sdk.log.error("gift_ton_rate:", err.message);
-      return { success: false, error: err.message };
+      return { success: false, error: String(err.message || err).slice(0, 500) };
     }
   },
 };
@@ -282,6 +294,7 @@ const giftPriceHistory = {
   description:
     "Get historical floor price data for gift collections. Supports different time scales and date ranges.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -316,7 +329,7 @@ const giftPriceHistory = {
       return { success: true, data: result };
     } catch (err) {
       sdk.log.error("gift_price_history:", err.message);
-      return { success: false, error: err.message };
+      return { success: false, error: String(err.message || err).slice(0, 500) };
     }
   },
 };

@@ -8,6 +8,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export const manifest = {
+  name: "voice-notes",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Transcribe voice messages and video notes using Telegram Premium speech-to-text.",
+};
+
 export const tools = (sdk) => [
   {
     name: "voice_transcribe",
@@ -16,6 +23,7 @@ export const tools = (sdk) => [
       "ALWAYS use this when you see [🎤 voice msg_id=...] or [🎬 video_note msg_id=...]. " +
       "Pass the msg_id number from the tag as message_id.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {

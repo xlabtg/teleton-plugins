@@ -282,7 +282,7 @@ export const actionTools = (sdk) => {
       "Requires the sale contract address (from domain listing) and the price in TON. " +
       "Verifies the on-chain price before sending. The transaction sends price + 1 TON gas.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -349,7 +349,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom] buy_domain failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },
@@ -362,7 +362,7 @@ export const actionTools = (sdk) => {
       "Transfers the domain NFT to the marketplace which deploys a sale contract. " +
       "You must own the domain to list it.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -464,7 +464,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom] list_for_sale failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },
@@ -477,7 +477,7 @@ export const actionTools = (sdk) => {
       "Transfers the domain NFT to the marketplace which deploys an auction contract. " +
       "You must own the domain to auction it.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -577,7 +577,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom] create_auction failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },
@@ -590,7 +590,7 @@ export const actionTools = (sdk) => {
       "Sends bid amount + 0.07 TON gas to the auction contract. " +
       "Your bid must be higher than the current highest bid.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -630,7 +630,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom]", this?.name || "action", "failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },
@@ -643,7 +643,7 @@ export const actionTools = (sdk) => {
       "For sales and auctions, you must be the seller. For offers, you must be the buyer. " +
       "Auctions can only be cancelled if there are no bids yet.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -683,7 +683,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom]", this?.name || "action", "failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },
@@ -699,7 +699,7 @@ export const actionTools = (sdk) => {
       "Minimum prices by length: 4 chars=100 TON, 5=50, 6=40, 7=30, 8=20, 9=10, 10=5, 11+=1 TON. " +
       "Bids must exceed the current highest bid (typically by at least 5%).",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -779,7 +779,7 @@ export const actionTools = (sdk) => {
         };
       } catch (err) {
         _log?.error("[webdom]", this?.name || "action", "failed:", err.message, err.stack);
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },

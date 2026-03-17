@@ -39,12 +39,20 @@ async function geocode(city) {
   return data.results[0];
 }
 
+export const manifest = {
+  name: "weather",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Current weather and 7-day forecast via Open-Meteo (no API key required).",
+};
+
 export const tools = (sdk) => [
   {
     name: "weather_current",
     description:
       "Get current weather for a city. Returns temperature, feels like, humidity, wind speed, and description in Russian. Supports any city name.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -100,6 +108,7 @@ export const tools = (sdk) => [
     description:
       "Get 7-day weather forecast for a city. Returns daily min/max temperature and conditions.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {

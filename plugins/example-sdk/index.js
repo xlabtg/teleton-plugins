@@ -49,6 +49,7 @@ export const tools = (sdk) => [
     description:
       "Greet a user and track how many times they've been greeted. Returns greeting count from the plugin's isolated database.",
     category: "action",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -95,6 +96,7 @@ export const tools = (sdk) => [
     description:
       "Check the bot's TON wallet balance and current TON/USD price. No parameters needed.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {},
@@ -145,7 +147,7 @@ export const tools = (sdk) => [
       },
       required: ["text"],
     },
-    scope: "dm-only", // Only available in DMs, not in groups
+    scope: "admin-only",
     category: "action",
     execute: async (params, context) => {
       const opts = {};

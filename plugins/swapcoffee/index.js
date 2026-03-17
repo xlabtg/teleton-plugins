@@ -98,6 +98,7 @@ const swapQuote = {
   description:
     "Get a swap quote -- find the optimal route between two tokens on TON with expected output amount, price impact, and gas estimate. Use token addresses (e.g. 'EQCxE6...') or 'native' for TON.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -195,6 +196,7 @@ const swapExecute = {
   description:
     "Execute a token swap on TON via swap.coffee aggregator. Finds the best route and sends the transaction from the agent wallet. Call swap_quote first to preview the rate.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -337,6 +339,7 @@ const swapStatus = {
   description:
     "Check the status of a swap execution. Poll this after swap_execute to see if the swap completed successfully.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -409,6 +412,7 @@ const swapTokens = {
   description:
     "Search for tokens on the TON blockchain -- by symbol name (e.g. 'USDT', 'NOT') or by address. Returns token metadata and USD price.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -509,6 +513,7 @@ const swapPrice = {
   description:
     'Get current USD prices for TON tokens. Use "native" for TON itself.',
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -574,6 +579,7 @@ const swapPools = {
   description:
     "Browse liquidity pools on TON DEXes -- search by token, sort by TVL, volume, or APR.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -680,6 +686,13 @@ const swapPools = {
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "swapcoffee",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "swap.coffee DEX aggregator on TON — find optimal swap routes, execute token swaps, browse pools, and check token prices.",
+};
 
 export const tools = (sdk) => {
   _sdk = sdk;

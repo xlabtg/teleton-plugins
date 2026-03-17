@@ -13,6 +13,13 @@ const API_BASE = "https://tonapi.io";
 // SDK export
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "tonapi",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "TON blockchain data from TONAPI -- accounts, jettons, NFTs, prices, transactions, traces, DNS, staking",
+};
+
 export const tools = (sdk) => {
   const API_KEY = sdk.secrets.get("api_key") ?? null;
   const RATE_LIMIT_MS = API_KEY ? 1000 : 4000;
@@ -59,6 +66,7 @@ export const tools = (sdk) => {
       description:
         "Get TON account info by address or .ton domain. Returns balance (in TON), status, interfaces, last activity, name, and whether it is a wallet. Use to look up any wallet or contract on TON.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -95,6 +103,7 @@ export const tools = (sdk) => {
       description:
         "List jetton (token) balances for a TON wallet. Returns each token's name, symbol, address, human-readable amount, and USD value if available. Use to see what tokens an account holds.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -141,6 +150,7 @@ export const tools = (sdk) => {
       description:
         "List NFTs owned by a TON account. Returns each NFT's address, collection, name, description, image, and verification status. Use to browse an account's NFT holdings.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -194,6 +204,7 @@ export const tools = (sdk) => {
       description:
         "Get recent events (transactions) for a TON account. Returns event ID, timestamp, scam flag, and actions with type-specific details (TonTransfer, JettonTransfer, NftItemTransfer, SmartContractExec, etc.). Use to review an account's transaction history.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -266,6 +277,7 @@ export const tools = (sdk) => {
       description:
         "Search TON accounts by domain name (.ton, .t.me, etc.). Returns matching addresses and their associated names. Use to resolve a domain to an on-chain address.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -298,6 +310,7 @@ export const tools = (sdk) => {
       description:
         "Get jetton metadata and stats by master contract address from TONAPI. Returns name, symbol, decimals, image, description, total supply (human-readable), mintable flag, holders count, and verification status.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -341,6 +354,7 @@ export const tools = (sdk) => {
       description:
         "List top holders of a jetton by master contract address from TONAPI. Returns each holder's owner address, name, is_wallet flag, and raw balance. Note: divide raw balance by 10^decimals (from tonapi_jetton_info) to get human-readable amounts.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -391,6 +405,7 @@ export const tools = (sdk) => {
       description:
         "Get current exchange rates for one or more TON tokens from TONAPI. Pass comma-separated addresses (use \"ton\" for native TON). Returns prices in the requested currencies (default: TON and USD).",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -427,6 +442,7 @@ export const tools = (sdk) => {
       description:
         "Get historical price chart data for a token from TONAPI. Returns timestamp-value data points. Optionally specify a date range with unix timestamps.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -471,6 +487,7 @@ export const tools = (sdk) => {
       description:
         "Get NFT collection details by contract address from TONAPI. Returns collection name, description, image, owner, and item count. Use when the user wants to inspect a specific NFT collection on TON.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -513,6 +530,7 @@ export const tools = (sdk) => {
       description:
         "List NFT items in a collection from TONAPI. Returns a compact summary per item: address, index, owner, name, image, sale status, and verification. Use when the user wants to browse items in a TON NFT collection.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -566,6 +584,7 @@ export const tools = (sdk) => {
       description:
         "Get detailed information about a single NFT item from TONAPI. Returns metadata (name, description, image, attributes), owner, collection, sale info (marketplace, price), previews, and verification status. Use when the user wants full details on a specific NFT.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -632,6 +651,7 @@ export const tools = (sdk) => {
       description:
         "Look up a specific TON blockchain transaction by its hash. Returns key fields: hash, account address, success status, timestamp, total fees (in TON), in_msg summary (source, destination, value), out_msgs count, and transaction type.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -683,6 +703,7 @@ export const tools = (sdk) => {
       description:
         "Get the execution trace for a TON transaction. Shows the full chain of internal messages as a flattened list of steps with depth, hash, account, success status, and timestamp. Use to understand how a transaction propagated through contracts.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -724,6 +745,7 @@ export const tools = (sdk) => {
       description:
         "List current TON blockchain validators with their stake amounts. Returns an array of validators with address, stake in TON, and max_factor. Also includes election timing (elect_at, elect_close) if available.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {},
@@ -756,6 +778,7 @@ export const tools = (sdk) => {
       description:
         "Resolve a .ton domain to its wallet and/or site address. Use when the user wants to look up which address a TON domain name points to. Returns wallet address, site address, and other DNS records if available.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -788,6 +811,7 @@ export const tools = (sdk) => {
       description:
         "Get domain info for a .ton domain including owner, expiry date, and NFT item address. Use when the user wants ownership or registration details for a TON domain.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -823,6 +847,7 @@ export const tools = (sdk) => {
       description:
         "List active .ton domain auctions. Use when the user wants to see which TON domains are currently up for auction and their prices. Returns domain names, current bids in TON, bidders, and auction dates.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -855,6 +880,7 @@ export const tools = (sdk) => {
       description:
         "List available staking pools on the TON blockchain. Returns pool addresses, names, APY, total staked amount, min stake, implementation type, nominator counts, and verification status. Optionally filter by an account address to check eligibility.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {
@@ -893,6 +919,7 @@ export const tools = (sdk) => {
       description:
         "Get detailed info for a specific TON staking pool by its contract address. Returns pool name, APY, total staked amount, min stake, implementation type, nominator counts, cycle times, and verification status.",
       category: "data-bearing",
+      scope: "always",
       parameters: {
         type: "object",
         properties: {

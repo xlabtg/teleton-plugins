@@ -146,7 +146,7 @@ export function readTools(sdk) {
             },
           };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -235,7 +235,7 @@ export function readTools(sdk) {
             },
           };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -290,7 +290,7 @@ export function readTools(sdk) {
             },
           };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -345,7 +345,7 @@ export function readTools(sdk) {
 
           return { success: true, data };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -391,7 +391,7 @@ export function readTools(sdk) {
             },
           };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },

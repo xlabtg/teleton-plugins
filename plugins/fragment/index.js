@@ -254,6 +254,13 @@ function parseCollections(html) {
 // Export -- SDK wrapper
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "fragment",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Search and browse Telegram's NFT marketplace — usernames, numbers, collectible gifts, auction history",
+};
+
 export const tools = (sdk) => {
 
 // ---------------------------------------------------------------------------
@@ -265,6 +272,7 @@ const fragmentSearch = {
   description:
     "Search usernames, phone numbers, or gifts on the Fragment.com marketplace. Returns a list of items with prices, status, and listing info.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -362,6 +370,7 @@ const fragmentItem = {
   description:
     "Get detailed info for a specific Fragment item (username, phone number, or gift). Returns status, price, owner wallet, and attributes.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -405,6 +414,7 @@ const fragmentHistory = {
   description:
     "Get ownership or bid/sale history for a Fragment item. Shows price, date, action type, and wallet address for each historical event.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -476,6 +486,7 @@ const fragmentNft = {
   description:
     "Get NFT metadata for a Fragment item from nft.fragment.com. Returns name, description, image URL, and attributes. No session needed.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -521,6 +532,7 @@ const fragmentCollections = {
   description:
     "List available gift collections on Fragment marketplace. Returns collection slugs, names, and item counts.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -556,6 +568,7 @@ const fragmentRate = {
   description:
     "Get the current TON/USD exchange rate from Fragment.com.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",

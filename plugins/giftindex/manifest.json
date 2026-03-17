@@ -55,6 +55,7 @@
       "description": "View market state, corridors, corridor advisory (cancel+re-place or wait), and top collections"
     }
   ],
+  "permissions": [],
   "tags": ["giftindex", "ton", "trading", "telegram-gifts", "index"],
   "repository": "https://github.com/TONresistor/teleton-plugins",
   "funding": null

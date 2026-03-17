@@ -25,6 +25,7 @@ const diceRoll = {
   description:
     "Roll one or more dice with configurable sides. Useful for games, decisions, or tabletop RPGs.",
   category: "action",
+  scope: "always",
 
   // JSON Schema for the parameters the LLM will provide.
   // Every property here becomes a named argument in params.
@@ -114,6 +115,7 @@ const randomPick = {
   description:
     "Randomly pick one item from a list of choices. Use for decisions, assignments, or draws.",
   category: "action",
+  scope: "always",
 
   parameters: {
     type: "object",

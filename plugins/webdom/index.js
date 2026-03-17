@@ -16,6 +16,17 @@ import { readTools } from "./tools/read.js";
 import { actionTools } from "./tools/actions.js";
 
 // ---------------------------------------------------------------------------
+// Manifest
+// ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "webdom",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Buy, sell, auction, and manage .ton domains and Telegram usernames on webdom.market",
+};
+
+// ---------------------------------------------------------------------------
 // Tools export (SDK format)
 // ---------------------------------------------------------------------------
 

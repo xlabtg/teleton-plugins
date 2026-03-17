@@ -45,6 +45,13 @@ import {
 // Export (SDK v1.0.0)
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "giftindex",
+  version: "2.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "GiftIndex ODROB trading — monitor and trade the Telegram Gifts index on TON with workflow guardrails.",
+};
+
 export const tools = (sdk) => {
   initMarket(sdk);
   initTrade(sdk);
@@ -76,6 +83,7 @@ const giftindexMarket = {
   description:
     'Get GiftIndex market overview: TON/USDT rate, fair value, order book corridors, top asks/bids, and top 10 collections by market cap.',
   category: 'data-bearing',
+  scope: 'always',
 
   parameters: {
     type: 'object',
@@ -149,6 +157,7 @@ const giftindexFairValue = {
   description:
     'Calculate the fair value of the GiftIndex token by aggregating floor prices of underlying Telegram Gift collections, weighted by market cap.',
   category: 'data-bearing',
+  scope: 'always',
 
   parameters: {
     type: 'object',
@@ -196,7 +205,7 @@ const giftindexPlaceBid = {
     'Automatically finds the best available asks, buys whole lots, and splits ' +
     'across multiple orders if needed. Owner only.',
   category: 'action',
-  scope: 'dm-only',
+  scope: 'admin-only',
 
   parameters: {
     type: 'object',
@@ -341,7 +350,7 @@ const giftindexPlaceAsk = {
     'Minimum $2 order value. Price must be within oracle corridor. ' +
     'Displayed price includes 10% platform fee.',
   category: 'action',
-  scope: 'dm-only',
+  scope: 'admin-only',
 
   parameters: {
     type: 'object',
@@ -419,7 +428,7 @@ const giftindexCancel = {
   description:
     'Cancel an existing order on the GiftIndex order book and reclaim tokens. Owner only.',
   category: 'action',
-  scope: 'dm-only',
+  scope: 'admin-only',
 
   parameters: {
     type: 'object',
@@ -469,6 +478,7 @@ const giftindexPortfolio = {
   description:
     'View current GiftIndex market state: order book prices, corridors, corridor advisory, and top collections.',
   category: 'data-bearing',
+  scope: 'always',
 
   parameters: {
     type: 'object',

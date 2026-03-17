@@ -152,6 +152,7 @@ const stormMarkets = {
   description:
     "List all available markets on Storm Trade with prices, funding rates, open interest, and trading config.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -205,6 +206,7 @@ const stormMarketInfo = {
   description:
     "Get detailed info for a specific market: price, funding, OI, trading limits, fee structure.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -247,6 +249,7 @@ const stormPositions = {
   description:
     "List open positions with unrealized P&L. Defaults to agent wallet if no address given.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -285,6 +288,7 @@ const stormOrders = {
   description:
     "List active or historical orders for a trader.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -332,6 +336,7 @@ const stormTraderStats = {
   description:
     "Get trader performance stats, P&L history, or the leaderboard.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -382,6 +387,7 @@ const stormOpenPosition = {
   description:
     "Open a long or short perpetual position. Specify market, direction, amount (USDT), and leverage.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -463,6 +469,7 @@ const stormClosePosition = {
   description:
     "Close an existing position (full or partial). Specify market and direction.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -546,6 +553,7 @@ const stormAddMargin = {
   name: "storm_add_margin",
   description: "Add margin to an existing position to reduce liquidation risk.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -612,6 +620,7 @@ const stormRemoveMargin = {
   name: "storm_remove_margin",
   description: "Remove excess margin from a position.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -681,6 +690,7 @@ const stormCreateOrder = {
     "For stopLoss/takeProfit: requires trigger_price and amount (base asset size to close).\n" +
     "For stopLimit/market: requires limit_price, amount (margin), and leverage.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -814,6 +824,7 @@ const stormCancelOrder = {
   name: "storm_cancel_order",
   description: "Cancel a pending order by market, direction, order type, and index.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -890,6 +901,7 @@ const stormStake = {
   name: "storm_stake",
   description: "Stake USDT/TON/NOT in a Storm Trade vault to earn trading fees.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -949,6 +961,7 @@ const stormUnstake = {
   name: "storm_unstake",
   description: "Unstake from a Storm Trade vault. Omit amount to unstake full balance.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -1001,6 +1014,13 @@ const stormUnstake = {
 // ---------------------------------------------------------------------------
 // Export
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "stormtrade",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Storm Trade perpetual futures on TON — trade crypto, stocks, forex, and commodities with up to 100x leverage.",
+};
 
 export const tools = (sdk) => {
   _sdk = sdk;

@@ -93,6 +93,7 @@ function makePoolListTool(name, description, pathSuffix, sdk) {
     name,
     description,
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -117,6 +118,13 @@ function makePoolListTool(name, description, pathSuffix, sdk) {
 // ---------------------------------------------------------------------------
 // Export -- SDK wrapper
 // ---------------------------------------------------------------------------
+
+export const manifest = {
+  name: "geckoterminal",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "TON DEX pool and token data -- trending, new, and top pools, trades, OHLCV, token info, batch prices",
+};
 
 export const tools = (sdk) => {
 
@@ -162,6 +170,7 @@ const geckoSearchPools = {
   description:
     "Search for pools on the TON network by token name, symbol, or contract address. Use when the user asks about a specific token or wants to find a pool.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -196,6 +205,7 @@ const geckoPoolInfo = {
   description:
     "Get detailed information for a specific pool on TON by its contract address. Returns price, volume, liquidity, fees, and token data.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -236,6 +246,7 @@ const geckoPoolTrades = {
   description:
     "Get recent trades for a specific pool on TON. Returns up to 300 trades from the last 24 hours with buy/sell type, amounts, and USD values.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -271,6 +282,7 @@ const geckoPoolOhlcv = {
   description:
     "Get OHLCV candlestick data for a pool on TON. Supports day, hour, and minute timeframes with configurable aggregation. Use for charting and price analysis.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -352,6 +364,7 @@ const geckoTokenInfo = {
   description:
     "Get full token data on TON by contract address: price, 24h volume, FDV, market cap, total supply, and top pools.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -402,6 +415,7 @@ const geckoTokenPools = {
   description:
     "Get all pools trading a specific token on TON. Use to find which DEX pools exist for a given token address.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -435,6 +449,7 @@ const geckoTokenPrices = {
   description:
     "Batch price lookup for multiple tokens on TON (up to 30 addresses). Returns price, name, symbol, and top pools for each token.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",

@@ -112,6 +112,13 @@ function formatTON(nano) {
 // Export (SDK v1.0.0)
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "multisend",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "Batch TON and jetton transfers via Highload Wallet v3 — send to up to 254 recipients in a single transaction.",
+};
+
 export const tools = (sdk) => {
   const { db, log, ton } = sdk;
 
@@ -124,6 +131,7 @@ const multisendInfo = {
   description:
     "Show the multisend wallet address derived from the agent mnemonic, its TON balance, deployment status, and query sequence state. Use to check if the multisend wallet exists and is funded.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -169,6 +177,7 @@ const multisendFund = {
   description:
     "Transfer TON from the agent's main wallet (V5R1) to the multisend wallet to fund it for batch operations.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -236,6 +245,7 @@ const multisendBatchTon = {
   description:
     "Send TON to up to 254 recipients in a single transaction via the multisend wallet. Ideal for airdrops, mass payments, and rewards distribution.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -342,6 +352,7 @@ const multisendBatchJetton = {
   description:
     "Send a jetton (fungible token) to up to 254 recipients in a single transaction via the multisend wallet. All transfers go through the multisend wallet's jetton wallet contract.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -498,6 +509,7 @@ const multisendStatus = {
   description:
     "Check the on-chain state of the multisend wallet: balance, timeout configuration, last cleanup timestamp, and subwallet ID.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",

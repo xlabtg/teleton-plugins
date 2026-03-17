@@ -17,13 +17,21 @@ const { Api } = _require("telegram");
 // Export
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "vid",
+  version: "1.0.1",
+  sdkVersion: ">=1.0.0",
+  description: "Search and send YouTube videos in chat via Telegram's @vid inline bot.",
+};
+
 export const tools = (sdk) => [
   {
     name: "vid",
     description:
       "Search and send a YouTube video in the current chat using Telegram's @vid inline bot (YouTube Search). " +
       "Provide a search query and optionally pick a result by index. The video is sent directly into the chat via @vid.",
-    category: "data-bearing",
+    category: "action",
+    scope: "always",
 
     parameters: {
       type: "object",
@@ -92,7 +100,7 @@ export const tools = (sdk) => [
           },
         };
       } catch (err) {
-        return { success: false, error: err.message };
+        return { success: false, error: String(err.message || err).slice(0, 500) };
       }
     },
   },

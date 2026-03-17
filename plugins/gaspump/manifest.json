@@ -26,7 +26,7 @@
     { "name": "gas_price_chart", "description": "Price history chart data" },
     { "name": "gas_king", "description": "Current King of the Hill token" }
   ],
-  "permissions": ["bridge"],
+  "permissions": [],
   "tags": ["token-launch", "ton", "meme-tokens", "trading", "api"],
   "repository": "https://github.com/TONresistor/teleton-plugins",
   "funding": null

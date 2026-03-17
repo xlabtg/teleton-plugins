@@ -98,6 +98,13 @@ function formatUser(u) {
 // SDK export
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "twitter",
+  version: "3.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "X/Twitter API v2 — read (search, lookup, trends) and write (post, like, retweet, follow) with OAuth 1.0a.",
+};
+
 export const tools = (sdk) => {
   // ---------------------------------------------------------------------------
   // Credential helpers — all via sdk.secrets
@@ -205,6 +212,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_post_lookup",
       category: "data-bearing",
+      scope: "always",
       description:
         "Get a tweet/post by its ID from X/Twitter. Returns text, author, creation date, language, and engagement metrics (likes, retweets, replies, views).",
       parameters: {
@@ -224,13 +232,14 @@ export const tools = (sdk) => {
           if (!data.data) return { success: false, error: "Tweet not found" };
           return { success: true, data: formatTweet(data.data, data.includes) };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_search_recent",
       category: "data-bearing",
+      scope: "always",
       description:
         "Search tweets from the last 7 days on X/Twitter. Supports operators: from:user, has:images, has:videos, has:links, lang:en, -is:retweet, -is:reply, is:verified, url:, #hashtag, @mention. Example: '(AI OR crypto) lang:en -is:retweet has:links'",
       parameters: {
@@ -253,13 +262,14 @@ export const tools = (sdk) => {
           const tweets = (data.data ?? []).map((t) => formatTweet(t, data.includes));
           return { success: true, data: { result_count: data.meta?.result_count ?? tweets.length, tweets } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_search_count",
       category: "data-bearing",
+      scope: "always",
       description:
         "Get the volume of tweets matching a query over time (histogram). Returns counts per time bucket. Useful to gauge how much a topic is discussed.",
       parameters: {
@@ -284,7 +294,7 @@ export const tools = (sdk) => {
             },
           };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -293,6 +303,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_user_lookup",
       category: "data-bearing",
+      scope: "always",
       description:
         "Get X/Twitter user info by username. Returns name, bio, location, follower/following counts, tweet count, verified status, profile image, and account creation date.",
       parameters: {
@@ -309,13 +320,14 @@ export const tools = (sdk) => {
           if (!data.data) return { success: false, error: `User @${name} not found` };
           return { success: true, data: formatUser(data.data) };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_user_lookup_id",
       category: "data-bearing",
+      scope: "always",
       description: "Get X/Twitter user info by numeric user ID. Returns name, bio, metrics, verified status, etc.",
       parameters: {
         type: "object",
@@ -330,13 +342,14 @@ export const tools = (sdk) => {
           if (!data.data) return { success: false, error: "User not found" };
           return { success: true, data: formatUser(data.data) };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_user_search",
       category: "data-bearing",
+      scope: "always",
       description: "Search X/Twitter users by keyword. Returns matching users with their profile info and metrics.",
       parameters: {
         type: "object",
@@ -356,7 +369,7 @@ export const tools = (sdk) => {
           const users = (data.data ?? []).map(formatUser);
           return { success: true, data: { users } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -365,6 +378,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_user_posts",
       category: "data-bearing",
+      scope: "always",
       description: "Get recent tweets posted by a user (by user ID). Returns up to 100 tweets with text, metrics, and dates.",
       parameters: {
         type: "object",
@@ -385,13 +399,14 @@ export const tools = (sdk) => {
           const tweets = (data.data ?? []).map((t) => formatTweet(t, data.includes));
           return { success: true, data: { tweets } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_user_mentions",
       category: "data-bearing",
+      scope: "always",
       description: "Get recent tweets mentioning a user (by user ID). Returns tweets where the user is @mentioned.",
       parameters: {
         type: "object",
@@ -412,7 +427,7 @@ export const tools = (sdk) => {
           const tweets = (data.data ?? []).map((t) => formatTweet(t, data.includes));
           return { success: true, data: { tweets } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -421,6 +436,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_user_followers",
       category: "data-bearing",
+      scope: "always",
       description: "List followers of a user (by user ID). Returns follower profiles with bios and metrics.",
       parameters: {
         type: "object",
@@ -439,13 +455,14 @@ export const tools = (sdk) => {
           const users = (data.data ?? []).map(formatUser);
           return { success: true, data: { result_count: data.meta?.result_count ?? users.length, users } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_user_following",
       category: "data-bearing",
+      scope: "always",
       description: "List accounts a user follows (by user ID). Returns followed user profiles with bios and metrics.",
       parameters: {
         type: "object",
@@ -464,7 +481,7 @@ export const tools = (sdk) => {
           const users = (data.data ?? []).map(formatUser);
           return { success: true, data: { result_count: data.meta?.result_count ?? users.length, users } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -473,6 +490,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_liking_users",
       category: "data-bearing",
+      scope: "always",
       description: "Get users who liked a specific tweet (by tweet ID).",
       parameters: {
         type: "object",
@@ -487,13 +505,14 @@ export const tools = (sdk) => {
           const users = (data.data ?? []).map(formatUser);
           return { success: true, data: { result_count: data.meta?.result_count ?? users.length, users } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_retweeters",
       category: "data-bearing",
+      scope: "always",
       description: "Get users who retweeted a specific tweet (by tweet ID).",
       parameters: {
         type: "object",
@@ -508,13 +527,14 @@ export const tools = (sdk) => {
           const users = (data.data ?? []).map(formatUser);
           return { success: true, data: { result_count: data.meta?.result_count ?? users.length, users } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_quote_posts",
       category: "data-bearing",
+      scope: "always",
       description: "Get tweets that quote a specific tweet (by tweet ID).",
       parameters: {
         type: "object",
@@ -535,7 +555,7 @@ export const tools = (sdk) => {
           const tweets = (data.data ?? []).map((t) => formatTweet(t, data.includes));
           return { success: true, data: { result_count: data.meta?.result_count ?? tweets.length, tweets } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -544,6 +564,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_trends",
       category: "data-bearing",
+      scope: "always",
       description:
         "Get trending topics on X/Twitter by location. Use WOEID: 1 = worldwide, 23424977 = US, 23424975 = UK, 23424856 = Japan, 615702 = Paris, 2459115 = New York. Returns trend names and tweet volumes.",
       parameters: {
@@ -562,7 +583,7 @@ export const tools = (sdk) => {
           }));
           return { success: true, data: { woeid: id, trends } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
@@ -571,6 +592,7 @@ export const tools = (sdk) => {
     {
       name: "twitter_post_create",
       category: "action",
+      scope: "admin-only",
       description: "Post a new tweet on X/Twitter. Requires OAuth credentials configured in webui. Can create replies and quote tweets.",
       parameters: {
         type: "object",
@@ -592,14 +614,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("POST", "/2/tweets", body);
           return { success: true, data: { id: data.data?.id, text: data.data?.text } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_post_delete",
       category: "action",
-      scope: "dm-only",
+      scope: "admin-only",
       description: "Delete a tweet you posted. Requires OAuth.",
       parameters: {
         type: "object",
@@ -613,13 +635,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("DELETE", `/2/tweets/${params.id}`);
           return { success: true, data: { deleted: data.data?.deleted ?? true } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_like",
       category: "action",
+      scope: "admin-only",
       description: "Like a tweet. Requires OAuth.",
       parameters: {
         type: "object",
@@ -634,13 +657,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("POST", `/2/users/${userId}/likes`, { tweet_id: params.tweet_id });
           return { success: true, data: { liked: data.data?.liked ?? true } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_unlike",
       category: "action",
+      scope: "admin-only",
       description: "Unlike a previously liked tweet. Requires OAuth.",
       parameters: {
         type: "object",
@@ -655,13 +679,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("DELETE", `/2/users/${userId}/likes/${params.tweet_id}`);
           return { success: true, data: { liked: data.data?.liked ?? false } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_retweet",
       category: "action",
+      scope: "admin-only",
       description: "Retweet a tweet. Requires OAuth.",
       parameters: {
         type: "object",
@@ -676,13 +701,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("POST", `/2/users/${userId}/retweets`, { tweet_id: params.tweet_id });
           return { success: true, data: { retweeted: data.data?.retweeted ?? true } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_unretweet",
       category: "action",
+      scope: "admin-only",
       description: "Undo a retweet. Requires OAuth.",
       parameters: {
         type: "object",
@@ -697,13 +723,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("DELETE", `/2/users/${userId}/retweets/${params.tweet_id}`);
           return { success: true, data: { retweeted: data.data?.retweeted ?? false } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_follow",
       category: "action",
+      scope: "admin-only",
       description: "Follow a user on X/Twitter. Requires OAuth.",
       parameters: {
         type: "object",
@@ -718,13 +745,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("POST", `/2/users/${userId}/following`, { target_user_id: params.target_user_id });
           return { success: true, data: { following: data.data?.following ?? true, pending: data.data?.pending_follow ?? false } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_unfollow",
       category: "action",
+      scope: "admin-only",
       description: "Unfollow a user on X/Twitter. Requires OAuth.",
       parameters: {
         type: "object",
@@ -739,13 +767,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("DELETE", `/2/users/${userId}/following/${params.target_user_id}`);
           return { success: true, data: { following: data.data?.following ?? false } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_bookmark",
       category: "action",
+      scope: "admin-only",
       description: "Bookmark a tweet for later. Requires OAuth.",
       parameters: {
         type: "object",
@@ -760,13 +789,14 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("POST", `/2/users/${userId}/bookmarks`, { tweet_id: params.tweet_id });
           return { success: true, data: { bookmarked: data.data?.bookmarked ?? true } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },
     {
       name: "twitter_remove_bookmark",
       category: "action",
+      scope: "admin-only",
       description: "Remove a bookmarked tweet. Requires OAuth.",
       parameters: {
         type: "object",
@@ -781,7 +811,7 @@ export const tools = (sdk) => {
           const data = await xFetchOAuth("DELETE", `/2/users/${userId}/bookmarks/${params.tweet_id}`);
           return { success: true, data: { bookmarked: data.data?.bookmarked ?? false } };
         } catch (err) {
-          return { success: false, error: err.message };
+          return { success: false, error: String(err.message || err).slice(0, 500) };
         }
       },
     },

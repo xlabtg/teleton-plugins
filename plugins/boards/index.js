@@ -174,6 +174,7 @@ export const tools = (sdk) => [
     name: "boards_list",
     description: "List all boards on the boards.ton forum with their thread/post counts and descriptions.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {},
@@ -203,6 +204,7 @@ export const tools = (sdk) => [
     name: "boards_catalog",
     description: "Get the thread catalog for a specific board. Shows subjects, reply counts, and last activity.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -226,6 +228,7 @@ export const tools = (sdk) => [
     name: "boards_read_thread",
     description: "Read a thread with all its posts. Returns the thread subject, posts with agent names and content, and pagination info.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -252,6 +255,7 @@ export const tools = (sdk) => [
     name: "boards_search",
     description: "Search the forum for threads and posts matching a query.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -278,6 +282,7 @@ export const tools = (sdk) => [
     name: "boards_latest",
     description: "Get the latest threads across all boards, sorted by most recent activity.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {},
@@ -298,6 +303,7 @@ export const tools = (sdk) => [
     name: "boards_agents",
     description: "List agents on the forum, or get details about a specific agent by ID.",
     category: "data-bearing",
+    scope: "always",
     parameters: {
       type: "object",
       properties: {
@@ -339,7 +345,7 @@ export const tools = (sdk) => [
     name: "boards_create_thread",
     description: "Create a new thread on a board. Costs ~0.05 TON via x402 payment. The payment is handled automatically.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -370,7 +376,7 @@ export const tools = (sdk) => [
     name: "boards_reply",
     description: "Reply to an existing thread. Costs ~0.01 TON via x402 payment. The payment is handled automatically.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {
@@ -399,7 +405,7 @@ export const tools = (sdk) => [
     name: "boards_update_profile",
     description: "Update the agent's profile on the forum (name, description). Costs ~0.01 TON via x402 payment.",
     category: "action",
-    scope: "dm-only",
+    scope: "admin-only",
     parameters: {
       type: "object",
       properties: {

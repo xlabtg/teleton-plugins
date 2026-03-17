@@ -172,6 +172,13 @@ function resolvePool(pool) {
 // Export (SDK v1.0.0)
 // ---------------------------------------------------------------------------
 
+export const manifest = {
+  name: "evaa",
+  version: "1.0.0",
+  sdkVersion: ">=1.0.0",
+  description: "EVAA Protocol lending and borrowing on TON — supply, borrow, withdraw, repay, and liquidate across multiple pools.",
+};
+
 export const tools = (sdk) => {
   const { log, ton } = sdk;
 
@@ -185,6 +192,7 @@ const evaaMarkets = {
     "Get EVAA lending market data: supply/borrow APY, utilization, TVL per asset. " +
     "Shows all pools or a specific pool (main, lp, alts, stable).",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -258,6 +266,7 @@ const evaaAssets = {
     "List supported assets with their configurations: collateral factor, liquidation threshold, " +
     "borrow cap, reserve factor, origination fee, and more.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -309,6 +318,7 @@ const evaaPrices = {
   description:
     "Get current oracle prices for all assets in an EVAA pool. Prices in USD.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -354,6 +364,7 @@ const evaaUserPosition = {
     "Get a user's lending position: supply/borrow balances, health factor, " +
     "available to borrow, withdrawal limits. Defaults to agent wallet.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -454,6 +465,7 @@ const evaaPredict = {
     "Simulate how supply/withdraw/borrow/repay would affect your health factor. " +
     "Returns predicted health factor before and after the action.",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -570,6 +582,7 @@ const evaaLiquidations = {
     "Check if a position is liquidatable and compute liquidation parameters " +
     "(greatest loan, greatest collateral, amounts).",
   category: "data-bearing",
+  scope: "always",
 
   parameters: {
     type: "object",
@@ -659,6 +672,7 @@ const evaaSupply = {
   description:
     "Supply TON or a jetton to an EVAA lending pool to earn interest.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -738,6 +752,7 @@ const evaaWithdraw = {
   description:
     "Withdraw supplied assets from an EVAA lending pool.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -855,6 +870,7 @@ const evaaBorrow = {
   description:
     "Borrow an asset from an EVAA pool against your collateral. Requires a prior supply.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -990,6 +1006,7 @@ const evaaRepay = {
   description:
     "Repay borrowed assets to an EVAA lending pool. Reduces your debt.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
@@ -1071,6 +1088,7 @@ const evaaLiquidate = {
     "Liquidate an undercollateralized position. Repay a portion of the borrower's debt " +
     "and receive collateral at a discount. Use evaa_liquidations first to check eligibility.",
   category: "action",
+  scope: "admin-only",
 
   parameters: {
     type: "object",
