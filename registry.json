@@ -200,6 +200,14 @@
   "author": "xlabtg",
   "tags": ["ton", "bridge", "miniapp", "tool", "tonbridge"],
   "path": "plugins/ton-bridge"
+    },
+    {
+      "id": "github-dev-assistant",
+      "name": "GitHub Dev Assistant",
+      "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via OAuth",
+      "author": "xlabtg",
+      "tags": ["github", "development", "automation", "oauth", "git", "ci-cd"],
+      "path": "plugins/github-dev-assistant"
     }
   ]
 }
