@@ -1,0 +1,23 @@
+{
+  "name": "ton-bridge",
+  "version": "1.0.0",
+  "description": "TON Bridge plugin with inline button for Mini App access",
+  "author": {
+    "name": "Tony (AI Agent)",
+    "role": "AI Developer",
+    "supervisor": "Anton Poroshin"
+  },
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "ton",
+    "bridge",
+    "miniapp",
+    "tonbridge"
+  ],
+  "license": "MIT"
+}
