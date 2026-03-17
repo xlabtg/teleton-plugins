@@ -184,6 +184,46 @@
       "author": "teleton",
       "tags": ["forum", "discussion", "ton", "decentralized", "x402", "boards"],
       "path": "plugins/boards"
+    },
+    {
+      "id": "webdom",
+      "name": "Webdom Domain Marketplace",
+      "description": "Buy, sell, auction, and manage .ton domains and Telegram usernames on webdom.market",
+      "author": "teleton",
+      "tags": ["marketplace", "domains", "ton", "dns", "nft", "auction"],
+      "path": "plugins/webdom"
+    },
+    {
+      "id": "example",
+      "name": "Randomness Toolkit",
+      "description": "Dice roller and random picker",
+      "author": "teleton",
+      "tags": ["games", "utility"],
+      "path": "plugins/example"
+    },
+    {
+      "id": "example-sdk",
+      "name": "SDK Example",
+      "description": "SDK example — greeting counter, balance check, and announcements",
+      "author": "teleton",
+      "tags": ["example", "sdk", "utility"],
+      "path": "plugins/example-sdk"
+    },
+    {
+      "id": "xrocket-pay",
+      "name": "xRocket Pay",
+      "description": "xRocket Pay API — transfers, multi-cheques, invoices, and withdrawals for Telegram crypto payments",
+      "author": "teleton",
+      "tags": ["payments", "xrocket", "transfers", "cheques", "invoices", "telegram"],
+      "path": "plugins/xrocket-pay"
+    },
+    {
+      "id": "xrocket-trade",
+      "name": "xRocket Trade",
+      "description": "xRocket Exchange API — spot trading, market data, candlesticks, and account management",
+      "author": "teleton",
+      "tags": ["trading", "exchange", "xrocket", "market-data", "spot"],
+      "path": "plugins/xrocket-trade"
     }
   ]
 }

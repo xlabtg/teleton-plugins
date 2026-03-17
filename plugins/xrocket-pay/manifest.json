@@ -1,0 +1,31 @@
+{
+  "id": "xrocket-pay",
+  "name": "xRocket Pay",
+  "version": "1.0.0",
+  "description": "xRocket Pay API — transfers, multi-cheques, invoices, and withdrawals for Telegram crypto payments",
+  "author": { "name": "teleton", "url": "https://github.com/TONresistor" },
+  "license": "MIT",
+  "entry": "index.js",
+  "sdkVersion": ">=1.0.0",
+  "teleton": ">=1.0.0",
+  "secrets": {
+    "api_key": { "required": true, "description": "xRocket Pay API key (from @xRocket bot → My Apps)" }
+  },
+  "tools": [
+    { "name": "xpay_app_info", "description": "Get app info (name, fees, balances)" },
+    { "name": "xpay_transfer", "description": "Transfer funds to a Telegram user" },
+    { "name": "xpay_withdraw", "description": "Withdraw to external wallet (multi-chain)" },
+    { "name": "xpay_currencies", "description": "List available currencies, limits, and fees" },
+    { "name": "xpay_cheque_create", "description": "Create a multi-cheque" },
+    { "name": "xpay_cheque_list", "description": "List multi-cheques" },
+    { "name": "xpay_cheque_delete", "description": "Delete a multi-cheque" },
+    { "name": "xpay_invoice_create", "description": "Create an invoice" },
+    { "name": "xpay_invoice_list", "description": "List invoices" },
+    { "name": "xpay_invoice_info", "description": "Get invoice details and payments" },
+    { "name": "xpay_invoice_delete", "description": "Delete an invoice" }
+  ],
+  "permissions": [],
+  "tags": ["payments", "xrocket", "transfers", "cheques", "invoices", "withdrawals", "telegram"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}
