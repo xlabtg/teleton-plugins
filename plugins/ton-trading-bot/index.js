@@ -30,6 +30,7 @@ export const manifest = {
     maxTradePercent: 10,       // max single trade as % of balance
     minBalanceTON: 1,          // minimum TON balance required to trade
     defaultSlippage: 0.05,     // 5% slippage tolerance
+    simulationBalance: 1000,   // starting virtual balance for paper trading
   },
 };
 
@@ -114,7 +115,7 @@ export const tools = (sdk) => [
           sdk.ton.dex.quote({
             fromAsset: from_asset,
             toAsset: to_asset,
-            amount,
+            amount: parseFloat(amount),
           }).catch((err) => {
             sdk.log.warn(`DEX quote failed: ${err.message}`);
             return null;
@@ -192,10 +193,10 @@ export const tools = (sdk) => [
             ton_balance_nano: tonBalance?.balanceNano ?? null,
             simulation_balance: simBalance,
             jetton_holdings: jettonBalances.map((j) => ({
-              jetton_address: j.jetton?.address ?? null,
-              name: j.jetton?.name ?? null,
-              symbol: j.jetton?.symbol ?? null,
-              balance: j.balance ?? null,
+              jetton_address: j.jettonAddress ?? null,
+              name: j.name ?? null,
+              symbol: j.symbol ?? null,
+              balance: j.balanceFormatted ?? j.balance ?? null,
             })),
             recent_trades: recentTrades,
           },
@@ -427,7 +428,7 @@ export const tools = (sdk) => [
         const result = await sdk.ton.dex.swap({
           fromAsset: from_asset,
           toAsset: to_asset,
-          amount,
+          amount: parseFloat(amount),
           slippage,
           ...(dex ? { dex } : {}),
         });
@@ -435,20 +436,34 @@ export const tools = (sdk) => [
         const tradeId = sdk.db
           .prepare(
             `INSERT INTO trade_journal
-             (timestamp, mode, action, from_asset, to_asset, amount_in, status, tx_hash)
-             VALUES (?, 'real', 'buy', ?, ?, ?, 'open', ?)`
+             (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, status)
+             VALUES (?, 'real', 'buy', ?, ?, ?, ?, 'open')`
           )
-          .run(Date.now(), from_asset, to_asset, parseFloat(amount), result?.txHash ?? null)
+          .run(
+            Date.now(),
+            from_asset,
+            to_asset,
+            parseFloat(amount),
+            result?.expectedOutput ? parseFloat(result.expectedOutput) : null
+          )
           .lastInsertRowid;
 
         sdk.log.info(
-          `Swap executed #${tradeId}: ${amount} ${from_asset} → ${to_asset} via ${dex ?? "best"}`
+          `Swap executed #${tradeId}: ${amount} ${from_asset} → ${to_asset} via ${result?.dex ?? dex ?? "best"}`
         );
 
-        await sdk.telegram.sendMessage(
-          context.chatId,
-          `Swap submitted: ${amount} ${from_asset} → ${to_asset}\nTrade ID: ${tradeId}\nAllow ~30 seconds for on-chain confirmation.`
-        );
+        try {
+          await sdk.telegram.sendMessage(
+            context.chatId,
+            `Swap submitted: ${amount} ${from_asset} → ${to_asset}\nExpected output: ${result?.expectedOutput ?? "unknown"}\nTrade ID: ${tradeId}\nAllow ~30 seconds for on-chain confirmation.`
+          );
+        } catch (msgErr) {
+          if (msgErr.name === "PluginSDKError") {
+            sdk.log.warn(`Could not send confirmation message: ${msgErr.code}: ${msgErr.message}`);
+          } else {
+            sdk.log.warn(`Could not send confirmation message: ${msgErr.message}`);
+          }
+        }
 
         return {
           success: true,
@@ -457,15 +472,19 @@ export const tools = (sdk) => [
             from_asset,
             to_asset,
             amount_in: amount,
+            expected_output: result?.expectedOutput ?? null,
+            min_output: result?.minOutput ?? null,
             slippage,
-            dex: dex ?? "auto",
-            tx_hash: result?.txHash ?? null,
+            dex: result?.dex ?? dex ?? "auto",
             status: "open",
             note: "Allow ~30 seconds for on-chain confirmation",
           },
         };
       } catch (err) {
         sdk.log.error(`ton_trading_execute_swap failed: ${err.message}`);
+        if (err.name === "PluginSDKError") {
+          return { success: false, error: `${err.code}: ${String(err.message).slice(0, 500)}` };
+        }
         return { success: false, error: String(err.message).slice(0, 500) };
       }
     },

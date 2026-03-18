@@ -185,7 +185,7 @@
       "tags": ["forum", "discussion", "ton", "decentralized", "x402", "boards"],
       "path": "plugins/boards"
     },
-	{
+    {
       "id": "ton-trading-bot",
       "name": "TON Trading Bot",
       "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, and DEX swap execution",
@@ -193,13 +193,13 @@
       "tags": ["trading", "ton", "dex", "portfolio", "simulation"],
       "path": "plugins/ton-trading-bot"
     },
-	  {
-  "id": "ton-bridge",
-  "name": "TON Bridge",
-  "description": "Beautiful inline button plugin for TON Bridge Mini App access",
-  "author": "xlabtg",
-  "tags": ["ton", "bridge", "miniapp", "tool", "tonbridge"],
-  "path": "plugins/ton-bridge"
+    {
+      "id": "ton-bridge",
+      "name": "TON Bridge",
+      "description": "Beautiful inline button plugin for TON Bridge Mini App access",
+      "author": "xlabtg",
+      "tags": ["ton", "bridge", "miniapp", "tool", "tonbridge"],
+      "path": "plugins/ton-bridge"
     },
     {
       "id": "github-dev-assistant",

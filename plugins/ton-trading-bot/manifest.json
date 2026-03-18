@@ -40,11 +40,5 @@
   "permissions": [],
   "tags": ["trading", "ton", "dex", "portfolio", "simulation"],
   "repository": "https://github.com/xlabtg/teleton-plugins",
-  "funding": null,
-  "defaultConfig": {
-    "maxTradePercent": 10,
-    "minBalanceTON": 1,
-    "defaultSlippage": 0.05,
-    "simulationBalance": 1000
-  }
+  "funding": null
 }
