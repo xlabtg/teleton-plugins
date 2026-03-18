@@ -1,28 +1,18 @@
 {
   "id": "github-dev-assistant",
   "name": "GitHub Dev Assistant",
-  "version": "1.0.0",
-  "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via OAuth",
+  "version": "2.0.0",
+  "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via Personal Access Token",
   "author": { "name": "xlabtg", "url": "https://github.com/xlabtg" },
   "license": "MIT",
   "entry": "index.js",
   "teleton": ">=1.0.0",
   "sdkVersion": ">=1.0.0",
   "secrets": {
-    "github_client_id": {
+    "github_token": {
       "required": true,
-      "env": "GITHUB_OAUTH_CLIENT_ID",
-      "description": "GitHub OAuth App Client ID"
-    },
-    "github_client_secret": {
-      "required": true,
-      "env": "GITHUB_OAUTH_CLIENT_SECRET",
-      "description": "GitHub OAuth App Client Secret"
-    },
-    "github_webhook_secret": {
-      "required": false,
-      "env": "GITHUB_WEBHOOK_SECRET",
-      "description": "Secret for webhook verification (optional)"
+      "env": "GITHUB_DEV_ASSISTANT_GITHUB_TOKEN",
+      "description": "GitHub Personal Access Token (create at https://github.com/settings/tokens)"
     }
   },
   "config": {
@@ -35,11 +25,6 @@
       "type": "string",
       "default": "main",
       "description": "Default branch name for commits and PRs"
-    },
-    "auto_sign_commits": {
-      "type": "boolean",
-      "default": true,
-      "description": "Automatically sign commits on behalf of agent"
     },
     "require_pr_review": {
       "type": "boolean",
@@ -58,24 +43,23 @@
     }
   },
   "tools": [
-    { "name": "github_auth", "description": "Initiate OAuth authorization with GitHub" },
-    { "name": "github_check_auth", "description": "Check current GitHub authorization status" },
-    { "name": "github_list_repos", "description": "Get list of user or organization repositories" },
-    { "name": "github_create_repo", "description": "Create a new repository on GitHub" },
-    { "name": "github_get_file", "description": "Get file content from a GitHub repository" },
-    { "name": "github_update_file", "description": "Create new file or update existing file with a commit" },
-    { "name": "github_create_branch", "description": "Create a new branch from a specified ref" },
+    { "name": "github_check_auth", "description": "Check if GitHub is connected and verify the authenticated account" },
+    { "name": "github_list_repos", "description": "List GitHub repositories for a user or organization" },
+    { "name": "github_create_repo", "description": "Create a new GitHub repository" },
+    { "name": "github_get_file", "description": "Read a file or list a directory from a GitHub repository" },
+    { "name": "github_update_file", "description": "Create or update a file in a GitHub repository with a commit" },
+    { "name": "github_create_branch", "description": "Create a new branch in a GitHub repository" },
     { "name": "github_create_pr", "description": "Create a new pull request" },
-    { "name": "github_list_prs", "description": "Get list of pull requests with filtering" },
-    { "name": "github_merge_pr", "description": "Merge a pull request with security policy checks" },
+    { "name": "github_list_prs", "description": "List pull requests in a repository" },
+    { "name": "github_merge_pr", "description": "Merge a pull request" },
     { "name": "github_create_issue", "description": "Create a new issue in a repository" },
-    { "name": "github_list_issues", "description": "Get list of issues with filtering" },
+    { "name": "github_list_issues", "description": "List issues in a repository" },
     { "name": "github_comment_issue", "description": "Add a comment to an issue or pull request" },
-    { "name": "github_close_issue", "description": "Close an issue or PR with optional comment" },
+    { "name": "github_close_issue", "description": "Close an issue or pull request" },
     { "name": "github_trigger_workflow", "description": "Manually trigger a GitHub Actions workflow" }
   ],
   "permissions": [],
-  "tags": ["github", "development", "automation", "oauth", "git", "ci-cd"],
+  "tags": ["github", "development", "automation", "git", "ci-cd"],
   "repository": "https://github.com/xlabtg/teleton-plugins",
   "funding": null
 }

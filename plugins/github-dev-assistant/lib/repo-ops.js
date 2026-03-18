@@ -7,51 +7,25 @@
  *  - github_get_file    — read file or directory content
  *  - github_update_file — create or update a file with a commit
  *  - github_create_branch — create a new branch from a ref
+ *
+ * All tools create a fresh GitHub client per execution to pick up the latest
+ * token from sdk.secrets (avoids stale client issues).
+ *
+ * All tools return { content: string } for direct LLM consumption.
  */
 
+import { createGitHubClient } from "./github-client.js";
 import { decodeBase64, encodeBase64, validateRequired, validateEnum, clampInt, formatError } from "./utils.js";
-
-/**
- * Format a repository object to a clean, consistent shape.
- * @param {object} r - Raw GitHub repository object
- * @returns {object}
- */
-function formatRepo(r) {
-  return {
-    id: r.id,
-    name: r.name,
-    full_name: r.full_name,
-    description: r.description ?? null,
-    private: r.private,
-    fork: r.fork,
-    url: r.html_url,
-    clone_url: r.clone_url,
-    ssh_url: r.ssh_url,
-    default_branch: r.default_branch,
-    language: r.language ?? null,
-    stars: r.stargazers_count ?? 0,
-    forks: r.forks_count ?? 0,
-    open_issues: r.open_issues_count ?? 0,
-    size_kb: r.size ?? 0,
-    created_at: r.created_at ?? null,
-    updated_at: r.updated_at ?? null,
-    pushed_at: r.pushed_at ?? null,
-    topics: r.topics ?? [],
-    license: r.license?.spdx_id ?? null,
-    visibility: r.visibility ?? (r.private ? "private" : "public"),
-  };
-}
 
 /**
  * Build repository operations tools.
  *
- * @param {object} client - GitHub API client (from github-client.js)
- * @param {object} sdk - Teleton plugin SDK (for config and logging)
+ * @param {object} sdk - Teleton plugin SDK (for config, logging, secrets)
  * @returns {object[]} Array of tool definitions
  */
-export function buildRepoOpsTools(client, sdk) {
+export function buildRepoOpsTools(sdk) {
   // Resolve owner from params, falling back to plugin config, then authenticated user
-  async function resolveOwner(owner) {
+  async function resolveOwner(client, owner) {
     if (owner) return owner;
     const configOwner = sdk.pluginConfig?.default_owner ?? null;
     if (configOwner) return configOwner;
@@ -67,8 +41,8 @@ export function buildRepoOpsTools(client, sdk) {
     {
       name: "github_list_repos",
       description:
-        "Get a list of GitHub repositories for the authenticated user or a specified owner/organization. " +
-        "Returns repository metadata including name, description, language, stars, and visibility.",
+        "Use this when the user wants to see their GitHub repositories or a list of repos for a user/org. " +
+        "Returns a formatted list of repositories with name, description, language, and visibility.",
       category: "data-bearing",
       parameters: {
         type: "object",
@@ -108,7 +82,8 @@ export function buildRepoOpsTools(client, sdk) {
       },
       execute: async (params) => {
         try {
-          const owner = await resolveOwner(params.owner ?? null);
+          const client = createGitHubClient(sdk);
+          const owner = await resolveOwner(client, params.owner ?? null);
           const perPage = clampInt(params.per_page, 1, 100, 30);
           const page = clampInt(params.page, 1, 9999, 1);
 
@@ -128,16 +103,15 @@ export function buildRepoOpsTools(client, sdk) {
             "asc"
           );
 
-          if (!typeVal.valid) return { success: false, error: typeVal.error };
-          if (!sortVal.valid) return { success: false, error: sortVal.error };
-          if (!directionVal.valid) return { success: false, error: directionVal.error };
+          if (!typeVal.valid) return { content: `Error: ${typeVal.error}` };
+          if (!sortVal.valid) return { content: `Error: ${sortVal.error}` };
+          if (!directionVal.valid) return { content: `Error: ${directionVal.error}` };
 
           // Determine endpoint: /user/repos for self, /users/:owner/repos or /orgs/:owner/repos
           let path;
           if (!params.owner) {
             path = "/user/repos";
           } else {
-            // Try user repos first; org repos have same structure
             path = `/users/${encodeURIComponent(owner)}/repos`;
           }
 
@@ -149,21 +123,31 @@ export function buildRepoOpsTools(client, sdk) {
             page,
           });
 
-          const repos = Array.isArray(data) ? data.map(formatRepo) : [];
+          const repos = Array.isArray(data) ? data : [];
 
           sdk.log.info(`github_list_repos: fetched ${repos.length} repos for ${owner}`);
 
+          if (repos.length === 0) {
+            return { content: `No repositories found for ${owner}.` };
+          }
+
+          const lines = repos.map((r) => {
+            const vis = r.private ? "private" : "public";
+            const lang = r.language ? ` [${r.language}]` : "";
+            const desc = r.description ? ` — ${r.description}` : "";
+            return `- **${r.name}** (${vis})${lang}${desc}`;
+          });
+
+          const pageInfo =
+            pagination.next
+              ? `\n\nPage ${page} of results. Use page=${pagination.next} to get more.`
+              : "";
+
           return {
-            success: true,
-            data: {
-              owner,
-              repos,
-              count: repos.length,
-              pagination,
-            },
+            content: `Repositories for **${owner}** (${repos.length} shown):\n\n${lines.join("\n")}${pageInfo}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to list repositories: ${formatError(err)}` };
         }
       },
     },
@@ -174,7 +158,8 @@ export function buildRepoOpsTools(client, sdk) {
     {
       name: "github_create_repo",
       description:
-        "Create a new GitHub repository. Returns the created repository's URL, ID, and default branch.",
+        "Use this when the user wants to create a new GitHub repository. " +
+        "Returns the URL of the newly created repository.",
       category: "action",
       parameters: {
         type: "object",
@@ -210,7 +195,9 @@ export function buildRepoOpsTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["name"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
+
+          const client = createGitHubClient(sdk);
 
           const body = {
             name: params.name,
@@ -225,12 +212,14 @@ export function buildRepoOpsTools(client, sdk) {
 
           sdk.log.info(`github_create_repo: created ${repo.full_name}`);
 
+          const vis = repo.private ? "private" : "public";
           return {
-            success: true,
-            data: formatRepo(repo),
+            content:
+              `Repository **${repo.full_name}** created successfully (${vis}).\n` +
+              `URL: ${repo.html_url}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to create repository: ${formatError(err)}` };
         }
       },
     },
@@ -241,8 +230,8 @@ export function buildRepoOpsTools(client, sdk) {
     {
       name: "github_get_file",
       description:
-        "Get the content of a file or list a directory from a GitHub repository. " +
-        "Returns decoded text content for files, or a list of entries for directories.",
+        "Use this when the user wants to read a file or list a directory from a GitHub repository. " +
+        "Returns the file content as text, or lists directory entries.",
       category: "data-bearing",
       parameters: {
         type: "object",
@@ -269,8 +258,9 @@ export function buildRepoOpsTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "path"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
 
+          const client = createGitHubClient(sdk);
           const queryParams = {};
           if (params.ref) queryParams.ref = params.ref;
 
@@ -281,20 +271,14 @@ export function buildRepoOpsTools(client, sdk) {
 
           // Directory listing
           if (Array.isArray(data)) {
+            const entries = data.map((e) => {
+              const icon = e.type === "dir" ? "📁" : "📄";
+              return `${icon} ${e.name}${e.type === "dir" ? "/" : ""}`;
+            });
             return {
-              success: true,
-              data: {
-                type: "dir",
-                path: params.path,
-                entries: data.map((e) => ({
-                  name: e.name,
-                  path: e.path,
-                  type: e.type,
-                  size: e.size,
-                  sha: e.sha,
-                  download_url: e.download_url ?? null,
-                })),
-              },
+              content:
+                `Directory **${params.path}** in ${params.owner}/${params.repo}:\n\n` +
+                entries.join("\n"),
             };
           }
 
@@ -303,22 +287,18 @@ export function buildRepoOpsTools(client, sdk) {
 
           sdk.log.info(`github_get_file: read ${data.path} (${data.size} bytes)`);
 
+          if (!content) {
+            return {
+              content: `File **${data.path}** exists but has no readable text content (${data.size} bytes).`,
+            };
+          }
+
           return {
-            success: true,
-            data: {
-              type: data.type,
-              name: data.name,
-              path: data.path,
-              sha: data.sha,
-              size: data.size,
-              content: content,
-              encoding: data.encoding ?? "base64",
-              html_url: data.html_url ?? null,
-              download_url: data.download_url ?? null,
-            },
+            content:
+              `File **${data.path}** (${data.size} bytes):\n\n\`\`\`\n${content}\n\`\`\``,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to get file: ${formatError(err)}` };
         }
       },
     },
@@ -329,9 +309,9 @@ export function buildRepoOpsTools(client, sdk) {
     {
       name: "github_update_file",
       description:
-        "Create a new file or update an existing file in a GitHub repository with a commit. " +
-        "For updates, the current file's SHA (from github_get_file) must be provided. " +
-        "Returns the file's new SHA and the commit SHA.",
+        "Use this when the user wants to create a new file or update an existing file in a GitHub repository. " +
+        "For updates, first call github_get_file to get the current SHA. " +
+        "Returns the commit URL on success.",
       category: "action",
       parameters: {
         type: "object",
@@ -378,7 +358,9 @@ export function buildRepoOpsTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "path", "content", "message"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
+
+          const client = createGitHubClient(sdk);
 
           const authorName =
             params.committer_name ??
@@ -407,18 +389,16 @@ export function buildRepoOpsTools(client, sdk) {
             `github_update_file: committed ${params.path} to ${params.owner}/${params.repo}`
           );
 
+          const action = params.sha ? "updated" : "created";
+          const commitUrl = result.commit?.html_url ?? null;
           return {
-            success: true,
-            data: {
-              file_sha: result.content?.sha ?? null,
-              file_path: result.content?.path ?? params.path,
-              commit_sha: result.commit?.sha ?? null,
-              commit_url: result.commit?.html_url ?? null,
-              message: params.message,
-            },
+            content:
+              `File **${params.path}** ${action} successfully in ${params.owner}/${params.repo}.\n` +
+              `Commit: "${params.message}"` +
+              (commitUrl ? `\nURL: ${commitUrl}` : ""),
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to update file: ${formatError(err)}` };
         }
       },
     },
@@ -429,8 +409,8 @@ export function buildRepoOpsTools(client, sdk) {
     {
       name: "github_create_branch",
       description:
-        "Create a new branch in a GitHub repository from a specified source ref (branch, tag, or commit SHA). " +
-        "Returns the new branch ref and its SHA.",
+        "Use this when the user wants to create a new branch in a GitHub repository. " +
+        "Returns the new branch name and its starting commit SHA.",
       category: "action",
       parameters: {
         type: "object",
@@ -457,8 +437,9 @@ export function buildRepoOpsTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "branch"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
 
+          const client = createGitHubClient(sdk);
           const owner = encodeURIComponent(params.owner);
           const repo = encodeURIComponent(params.repo);
 
@@ -468,8 +449,7 @@ export function buildRepoOpsTools(client, sdk) {
           const sha = refData.object?.sha;
           if (!sha) {
             return {
-              success: false,
-              error: `Could not resolve SHA for ref: ${fromRef}`,
+              content: `Failed to create branch: could not resolve source branch "${fromRef}".`,
             };
           }
 
@@ -483,18 +463,14 @@ export function buildRepoOpsTools(client, sdk) {
             `github_create_branch: created ${params.branch} from ${fromRef} in ${params.owner}/${params.repo}`
           );
 
+          const newSha = result.object?.sha ?? sha;
           return {
-            success: true,
-            data: {
-              branch: params.branch,
-              sha: result.object?.sha ?? sha,
-              ref: result.ref ?? `refs/heads/${params.branch}`,
-              source_ref: fromRef,
-              source_sha: sha,
-            },
+            content:
+              `Branch **${params.branch}** created in ${params.owner}/${params.repo} from \`${fromRef}\`.\n` +
+              `SHA: ${newSha.slice(0, 7)}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to create branch: ${formatError(err)}` };
         }
       },
     },

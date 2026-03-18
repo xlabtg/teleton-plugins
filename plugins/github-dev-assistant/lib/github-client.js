@@ -2,7 +2,7 @@
  * GitHub REST API client for the github-dev-assistant plugin.
  *
  * Wraps the GitHub REST API v3 with:
- * - Automatic Authorization header injection from sdk.secrets
+ * - Automatic Authorization header injection from sdk.secrets at request time
  * - Rate-limit tracking and soft throttling
  * - Structured error handling with no token leakage in logs
  * - Pagination support via Link header parsing
@@ -10,6 +10,9 @@
  * Usage:
  *   const client = createGitHubClient(sdk);
  *   const data = await client.get("/user/repos");
+ *
+ * The client reads the token from sdk.secrets on every request, so stale
+ * client instances automatically pick up updated tokens.
  */
 
 import { formatError, createRateLimiter, parseLinkHeader } from "./utils.js";
@@ -30,16 +33,17 @@ export function createGitHubClient(sdk) {
   const rateLimiter = createRateLimiter(MIN_REQUEST_DELAY_MS);
 
   /**
-   * Retrieve the stored OAuth access token from sdk.secrets.
+   * Retrieve the stored Personal Access Token from sdk.secrets.
    * Returns null if not set (unauthenticated).
    * @returns {string|null}
    */
   function getAccessToken() {
-    return sdk.secrets.get("github_access_token") ?? null;
+    return sdk.secrets.get("github_token") ?? null;
   }
 
   /**
    * Build common request headers.
+   * Token is read at request time — never at client creation time.
    * @returns {object}
    */
   function buildHeaders(extraHeaders = {}) {
@@ -52,7 +56,7 @@ export function createGitHubClient(sdk) {
       ...extraHeaders,
     };
     if (token) {
-      // Token stored and injected at request time — never logged
+      // Token injected at request time — never logged
       headers.Authorization = `Bearer ${token}`;
     }
     return headers;
@@ -112,7 +116,7 @@ export function createGitHubClient(sdk) {
 
       // Map common GitHub status codes to helpful messages
       const statusMessages = {
-        401: "Not authenticated. Run github_auth to connect your GitHub account.",
+        401: "Not authenticated. Please set the github_token secret with a valid Personal Access Token.",
         403: `Access denied. ${ghMessage}`,
         404: `Not found. ${ghMessage}`,
         409: `Conflict. ${ghMessage}`,
@@ -198,22 +202,19 @@ export function createGitHubClient(sdk) {
     },
 
     /**
-     * POST with no JSON body (for workflow dispatches etc.)
+     * POST with raw response (for workflow dispatches etc.)
      * @param {string} path
      * @param {object} body
-     * @returns {Promise<{ status: number }>}
+     * @returns {Promise<{ status: number, data: any }>}
      */
     async postRaw(path, body) {
       const { status, data } = await request("POST", path, body);
       return { status, data };
     },
 
-    /** Check if authenticated (token is present) */
+    /** Check if authenticated (token is present in secrets) */
     isAuthenticated() {
       return !!getAccessToken();
     },
-
-    /** Get current access token (for auth module use only — not to be logged) */
-    getAccessToken,
   };
 }

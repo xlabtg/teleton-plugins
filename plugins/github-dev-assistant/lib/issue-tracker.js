@@ -7,47 +7,23 @@
  *  - github_comment_issue — add a comment to an issue or PR
  *  - github_close_issue   — close an issue or PR with optional comment
  *  - github_trigger_workflow — trigger a GitHub Actions workflow
+ *
+ * All tools create a fresh GitHub client per execution to pick up the latest
+ * token from sdk.secrets (avoids stale client issues).
+ *
+ * All tools return { content: string } for direct LLM consumption.
  */
 
+import { createGitHubClient } from "./github-client.js";
 import { validateRequired, validateEnum, clampInt, formatError } from "./utils.js";
-
-/**
- * Format an issue object to a clean, consistent shape.
- * @param {object} issue - Raw GitHub issue object
- * @returns {object}
- */
-function formatIssue(issue) {
-  return {
-    number: issue.number,
-    title: issue.title,
-    body: issue.body ?? null,
-    state: issue.state,
-    state_reason: issue.state_reason ?? null,
-    url: issue.html_url,
-    author: issue.user?.login ?? null,
-    assignees: (issue.assignees ?? []).map((a) => a.login),
-    labels: (issue.labels ?? []).map((l) =>
-      typeof l === "string" ? l : l.name
-    ),
-    milestone: issue.milestone?.title ?? null,
-    comments: issue.comments ?? 0,
-    pull_request: issue.pull_request ? true : false,
-    locked: issue.locked ?? false,
-    created_at: issue.created_at ?? null,
-    updated_at: issue.updated_at ?? null,
-    closed_at: issue.closed_at ?? null,
-    closed_by: issue.closed_by?.login ?? null,
-  };
-}
 
 /**
  * Build issue tracking and workflow tools.
  *
- * @param {object} client - GitHub API client (from github-client.js)
  * @param {object} sdk - Teleton plugin SDK
  * @returns {object[]} Array of tool definitions
  */
-export function buildIssueTrackerTools(client, sdk) {
+export function buildIssueTrackerTools(sdk) {
   return [
     // -------------------------------------------------------------------------
     // Tool: github_create_issue
@@ -55,8 +31,8 @@ export function buildIssueTrackerTools(client, sdk) {
     {
       name: "github_create_issue",
       description:
-        "Create a new issue in a GitHub repository. " +
-        "Returns the issue number, URL, and assigned labels.",
+        "Use this when the user wants to create a new issue or bug report in a GitHub repository. " +
+        "Returns the issue number and URL.",
       category: "action",
       parameters: {
         type: "object",
@@ -97,7 +73,9 @@ export function buildIssueTrackerTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "title"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
+
+          const client = createGitHubClient(sdk);
 
           const body = { title: params.title };
           if (params.body) body.body = params.body;
@@ -118,12 +96,16 @@ export function buildIssueTrackerTools(client, sdk) {
             `github_create_issue: created issue #${issue.number} in ${params.owner}/${params.repo}`
           );
 
+          const labels = issue.labels?.length
+            ? ` [${issue.labels.map((l) => (typeof l === "string" ? l : l.name)).join(", ")}]`
+            : "";
           return {
-            success: true,
-            data: formatIssue(issue),
+            content:
+              `Issue #${issue.number} created: **${issue.title}**${labels}\n` +
+              `URL: ${issue.html_url}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to create issue: ${formatError(err)}` };
         }
       },
     },
@@ -134,8 +116,8 @@ export function buildIssueTrackerTools(client, sdk) {
     {
       name: "github_list_issues",
       description:
-        "List issues in a GitHub repository with optional filtering by state, labels, assignee, and sort order. " +
-        "Note: Pull requests are also returned by GitHub's issues API — check the pull_request field to distinguish them.",
+        "Use this when the user wants to see open issues or a list of bugs/tasks in a GitHub repository. " +
+        "Returns a formatted list of issues with title, author, labels, and URL.",
       category: "data-bearing",
       parameters: {
         type: "object",
@@ -156,7 +138,7 @@ export function buildIssueTrackerTools(client, sdk) {
           labels: {
             type: "array",
             items: { type: "string" },
-            description: "Filter by label names (comma-separated in API)",
+            description: "Filter by label names",
           },
           assignee: {
             type: "string",
@@ -197,15 +179,17 @@ export function buildIssueTrackerTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
+
+          const client = createGitHubClient(sdk);
 
           const stateVal = validateEnum(params.state, ["open", "closed", "all"], "open");
           const sortVal = validateEnum(params.sort, ["created", "updated", "comments"], "created");
           const directionVal = validateEnum(params.direction, ["asc", "desc"], "desc");
 
-          if (!stateVal.valid) return { success: false, error: stateVal.error };
-          if (!sortVal.valid) return { success: false, error: sortVal.error };
-          if (!directionVal.valid) return { success: false, error: directionVal.error };
+          if (!stateVal.valid) return { content: `Error: ${stateVal.error}` };
+          if (!sortVal.valid) return { content: `Error: ${sortVal.error}` };
+          if (!directionVal.valid) return { content: `Error: ${directionVal.error}` };
 
           const perPage = clampInt(params.per_page, 1, 100, 30);
           const page = clampInt(params.page, 1, 9999, 1);
@@ -229,22 +213,40 @@ export function buildIssueTrackerTools(client, sdk) {
             queryParams
           );
 
-          const issues = Array.isArray(data) ? data.map(formatIssue) : [];
+          // Filter out PRs — GitHub issues API returns both
+          const issues = Array.isArray(data) ? data.filter((i) => !i.pull_request) : [];
 
           sdk.log.info(
             `github_list_issues: fetched ${issues.length} issues from ${params.owner}/${params.repo}`
           );
 
+          if (issues.length === 0) {
+            return { content: `No ${stateVal.value} issues found in ${params.owner}/${params.repo}.` };
+          }
+
+          const lines = issues.map((issue) => {
+            const labels = issue.labels?.length
+              ? ` [${issue.labels.map((l) => (typeof l === "string" ? l : l.name)).join(", ")}]`
+              : "";
+            const assignee = issue.assignees?.length
+              ? ` → @${issue.assignees.map((a) => a.login).join(", @")}`
+              : "";
+            return `- #${issue.number} **${issue.title}**${labels}${assignee} by @${issue.user?.login ?? "unknown"}\n  ${issue.html_url}`;
+          });
+
+          const pageInfo =
+            pagination.next
+              ? `\n\nPage ${page} of results. Use page=${pagination.next} to get more.`
+              : "";
+
           return {
-            success: true,
-            data: {
-              issues,
-              count: issues.length,
-              pagination,
-            },
+            content:
+              `${stateVal.value.charAt(0).toUpperCase() + stateVal.value.slice(1)} issues in **${params.owner}/${params.repo}** (${issues.length} shown):\n\n` +
+              lines.join("\n") +
+              pageInfo,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to list issues: ${formatError(err)}` };
         }
       },
     },
@@ -255,8 +257,8 @@ export function buildIssueTrackerTools(client, sdk) {
     {
       name: "github_comment_issue",
       description:
-        "Add a comment to a GitHub issue or pull request. " +
-        "Returns the comment ID, URL, and creation timestamp.",
+        "Use this when the user wants to add a comment to a GitHub issue or pull request. " +
+        "Returns a confirmation with the comment URL.",
       category: "action",
       parameters: {
         type: "object",
@@ -283,12 +285,14 @@ export function buildIssueTrackerTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "issue_number", "body"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
 
           const issueNum = Math.floor(Number(params.issue_number));
           if (!Number.isFinite(issueNum) || issueNum < 1) {
-            return { success: false, error: "issue_number must be a positive integer" };
+            return { content: "Error: issue_number must be a positive integer" };
           }
+
+          const client = createGitHubClient(sdk);
 
           const comment = await client.post(
             `/repos/${encodeURIComponent(params.owner)}/${encodeURIComponent(params.repo)}/issues/${issueNum}/comments`,
@@ -300,18 +304,12 @@ export function buildIssueTrackerTools(client, sdk) {
           );
 
           return {
-            success: true,
-            data: {
-              id: comment.id,
-              url: comment.html_url,
-              body: comment.body,
-              author: comment.user?.login ?? null,
-              created_at: comment.created_at ?? null,
-              updated_at: comment.updated_at ?? null,
-            },
+            content:
+              `Comment added to #${issueNum} in ${params.owner}/${params.repo}.\n` +
+              `URL: ${comment.html_url}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to comment on issue: ${formatError(err)}` };
         }
       },
     },
@@ -322,8 +320,8 @@ export function buildIssueTrackerTools(client, sdk) {
     {
       name: "github_close_issue",
       description:
-        "Close a GitHub issue or pull request, optionally adding a closing comment. " +
-        "Returns the updated issue state and close timestamp.",
+        "Use this when the user wants to close a GitHub issue (mark as done or won't fix). " +
+        "Optionally posts a closing comment. Returns a confirmation.",
       category: "action",
       parameters: {
         type: "object",
@@ -355,11 +353,11 @@ export function buildIssueTrackerTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "issue_number"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
 
           const issueNum = Math.floor(Number(params.issue_number));
           if (!Number.isFinite(issueNum) || issueNum < 1) {
-            return { success: false, error: "issue_number must be a positive integer" };
+            return { content: "Error: issue_number must be a positive integer" };
           }
 
           const reasonVal = validateEnum(
@@ -367,8 +365,9 @@ export function buildIssueTrackerTools(client, sdk) {
             ["completed", "not_planned"],
             "completed"
           );
-          if (!reasonVal.valid) return { success: false, error: reasonVal.error };
+          if (!reasonVal.valid) return { content: `Error: ${reasonVal.error}` };
 
+          const client = createGitHubClient(sdk);
           const owner = encodeURIComponent(params.owner);
           const repo = encodeURIComponent(params.repo);
 
@@ -392,12 +391,14 @@ export function buildIssueTrackerTools(client, sdk) {
             `github_close_issue: closed #${issueNum} in ${params.owner}/${params.repo} (${reasonVal.value})`
           );
 
+          const reasonLabel = reasonVal.value === "not_planned" ? "won't fix" : "completed";
           return {
-            success: true,
-            data: formatIssue(issue),
+            content:
+              `Issue #${issueNum} closed as ${reasonLabel}: **${issue.title}**\n` +
+              `URL: ${issue.html_url}`,
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to close issue: ${formatError(err)}` };
         }
       },
     },
@@ -408,9 +409,8 @@ export function buildIssueTrackerTools(client, sdk) {
     {
       name: "github_trigger_workflow",
       description:
-        "Manually trigger a GitHub Actions workflow dispatch event. " +
-        "The workflow must have workflow_dispatch trigger configured. " +
-        "Returns a confirmation message.",
+        "Use this when the user wants to manually trigger a GitHub Actions workflow (CI/CD pipeline). " +
+        "The workflow must have workflow_dispatch configured. Returns a confirmation.",
       category: "action",
       parameters: {
         type: "object",
@@ -443,8 +443,9 @@ export function buildIssueTrackerTools(client, sdk) {
       execute: async (params) => {
         try {
           const check = validateRequired(params, ["owner", "repo", "workflow_id", "ref"]);
-          if (!check.valid) return { success: false, error: check.error };
+          if (!check.valid) return { content: `Error: ${check.error}` };
 
+          const client = createGitHubClient(sdk);
           const owner = encodeURIComponent(params.owner);
           const repo = encodeURIComponent(params.repo);
           const workflowId = encodeURIComponent(params.workflow_id);
@@ -463,8 +464,7 @@ export function buildIssueTrackerTools(client, sdk) {
 
           if (status !== 204) {
             return {
-              success: false,
-              error: `Unexpected response from GitHub Actions API: HTTP ${status}`,
+              content: `Failed to trigger workflow: unexpected response (HTTP ${status}).`,
             };
           }
 
@@ -473,17 +473,14 @@ export function buildIssueTrackerTools(client, sdk) {
           );
 
           return {
-            success: true,
-            data: {
-              message: `Workflow '${params.workflow_id}' triggered on branch/ref '${params.ref}'.`,
-              workflow_id: params.workflow_id,
-              ref: params.ref,
-              repository: `${params.owner}/${params.repo}`,
-              inputs: params.inputs ?? {},
-            },
+            content:
+              `Workflow **${params.workflow_id}** triggered on \`${params.ref}\` in ${params.owner}/${params.repo}.\n` +
+              (params.inputs && Object.keys(params.inputs).length
+                ? `Inputs: ${JSON.stringify(params.inputs)}`
+                : ""),
           };
         } catch (err) {
-          return { success: false, error: formatError(err) };
+          return { content: `Failed to trigger workflow: ${formatError(err)}` };
         }
       },
     },

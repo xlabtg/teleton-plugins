@@ -1,58 +1,38 @@
 /**
- * Unit tests for lib/auth.js
+ * Tests for github_check_auth tool.
  *
- * Tests OAuth flow: state generation, code exchange, auth check, revoke.
+ * The github-dev-assistant plugin now uses Personal Access Token (PAT)
+ * authentication instead of OAuth. This file tests that the auth check
+ * correctly validates the stored token and returns friendly messages.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createAuthManager } from "../lib/auth.js";
+import { tools } from "../index.js";
 
 // ---------------------------------------------------------------------------
-// Mock SDK
+// Helpers
 // ---------------------------------------------------------------------------
 
-function makeSdk({ clientId = "test-client-id", clientSecret = "test-client-secret", storedToken = null } = {}) {
-  const storage = new Map();
-  const secrets = new Map();
-  if (clientId) secrets.set("github_client_id", clientId);
-  if (clientSecret) secrets.set("github_client_secret", clientSecret);
-  if (storedToken) secrets.set("github_access_token", storedToken);
-
+function makeSdk(token = null, config = {}) {
   return {
     secrets: {
-      get: (key) => secrets.get(key) ?? null,
-      set: (key, value) => secrets.set(key, value),
-      delete: (key) => secrets.delete(key),
-      _map: secrets,
-    },
-    storage: {
-      get: (key) => storage.get(key) ?? null,
-      set: (key, value) => storage.set(key, value),
-      delete: (key) => storage.delete(key),
-      _map: storage,
+      get: (key) => (key === "github_token" ? token : null),
+      set: vi.fn(),
+      delete: vi.fn(),
     },
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    pluginConfig: {},
+    pluginConfig: {
+      default_branch: "main",
+      ...config,
+    },
+    llm: { confirm: vi.fn() },
   };
 }
 
-// ---------------------------------------------------------------------------
-// Mock fetch
-// ---------------------------------------------------------------------------
-
-function mockFetchSequence(responses) {
-  let callIndex = 0;
-  return vi.fn().mockImplementation(() => {
-    const response = responses[callIndex] ?? responses[responses.length - 1];
-    callIndex++;
-    const { status, body } = response;
-    return Promise.resolve({
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => body,
-      text: async () => JSON.stringify(body),
-    });
-  });
+function findTool(toolList, name) {
+  const tool = toolList.find((t) => t.name === name);
+  if (!tool) throw new Error(`Tool '${name}' not found`);
+  return tool;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,214 +43,78 @@ let originalFetch;
 beforeEach(() => { originalFetch = global.fetch; });
 afterEach(() => { global.fetch = originalFetch; vi.restoreAllMocks(); });
 
-describe("createAuthManager - initiateOAuth", () => {
-  it("returns auth_url and state with default scopes", () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-    const result = auth.initiateOAuth();
+describe("github_check_auth", () => {
+  it("returns not-connected message when no token is set", async () => {
+    const sdk = makeSdk(null); // no token
+    const toolList = tools(sdk);
+    const tool = findTool(toolList, "github_check_auth");
 
-    expect(result.auth_url).toContain("github.com/login/oauth/authorize");
-    expect(result.auth_url).toContain("client_id=test-client-id");
-    expect(result.auth_url).toContain("scope=repo+workflow+user");
-    expect(result.state).toBeTruthy();
-    expect(result.state.length).toBe(64); // 32 bytes → 64 hex chars
-    expect(result.instructions).toBeTruthy();
+    const result = await tool.execute({});
+
+    expect(result.content).toMatch(/not connected/i);
+    expect(result.content).toMatch(/github_token/);
   });
 
-  it("throws when client_id is not configured", () => {
-    const sdk = makeSdk({ clientId: null });
-    const auth = createAuthManager(sdk);
-    expect(() => auth.initiateOAuth()).toThrow(/client_id/i);
+  it("returns authenticated username when token is valid", async () => {
+    const sdk = makeSdk("ghp_validtoken");
+    const toolList = tools(sdk);
+    const tool = findTool(toolList, "github_check_auth");
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ login: "octocat", name: "The Octocat" }),
+    });
+
+    const result = await tool.execute({});
+
+    expect(result.content).toMatch(/octocat/);
+    expect(result.content).toMatch(/connected/i);
   });
 
-  it("saves state in sdk.storage with expiry", () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-    const { state } = auth.initiateOAuth();
+  it("returns token expired message on 401", async () => {
+    const sdk = makeSdk("ghp_expiredtoken");
+    const toolList = tools(sdk);
+    const tool = findTool(toolList, "github_check_auth");
 
-    // State should be stored with a prefix
-    const stored = sdk.storage.get(`github_oauth_state_${state}`);
-    expect(stored).toBeTruthy();
-    const entry = JSON.parse(stored);
-    expect(entry.state).toBe(state);
-    expect(entry.expires_at).toBeGreaterThan(Date.now());
-  });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ message: "Bad credentials" }),
+    });
 
-  it("accepts custom scopes", () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-    const { auth_url } = auth.initiateOAuth(["read:user", "gist"]);
-    expect(auth_url).toContain("scope=read%3Auser+gist");
-  });
-});
+    const result = await tool.execute({});
 
-describe("createAuthManager - exchangeCode", () => {
-  it("exchanges code for token and stores it", async () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-
-    // Pre-populate a valid state
-    const { state } = auth.initiateOAuth();
-
-    global.fetch = mockFetchSequence([
-      // GitHub token exchange
-      { status: 200, body: { access_token: "ghp_newtoken", scope: "repo,user", token_type: "bearer" } },
-      // GitHub /user verification
-      { status: 200, body: { login: "octocat", id: 1 } },
-    ]);
-
-    const result = await auth.exchangeCode("auth-code-123", state);
-
-    expect(result.user_login).toBe("octocat");
-    expect(result.scopes).toContain("repo");
-    // Token should be stored in secrets
-    expect(sdk.secrets._map.get("github_access_token")).toBe("ghp_newtoken");
-  });
-
-  it("throws on invalid state (CSRF protection)", async () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-
-    await expect(
-      auth.exchangeCode("auth-code-123", "invalid-state-value")
-    ).rejects.toThrow(/invalid or expired/i);
-  });
-
-  it("throws on expired state", async () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-
-    // Manually insert an expired state entry
-    const fakeState = "a".repeat(64);
-    sdk.storage.set(`github_oauth_state_${fakeState}`, JSON.stringify({
-      state: fakeState,
-      created_at: Date.now() - 700000,
-      expires_at: Date.now() - 100000, // expired 100s ago
-    }));
-
-    await expect(
-      auth.exchangeCode("code", fakeState)
-    ).rejects.toThrow(/invalid or expired/i);
-  });
-
-  it("throws when GitHub returns error in token response", async () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-    const { state } = auth.initiateOAuth();
-
-    global.fetch = mockFetchSequence([
-      { status: 200, body: { error: "bad_verification_code", error_description: "The code passed is incorrect or expired." } },
-    ]);
-
-    await expect(auth.exchangeCode("bad-code", state)).rejects.toThrow(
-      /incorrect or expired/
-    );
-  });
-
-  it("consumes state after use (prevents replay)", async () => {
-    const sdk = makeSdk();
-    const auth = createAuthManager(sdk);
-    const { state } = auth.initiateOAuth();
-
-    global.fetch = mockFetchSequence([
-      { status: 200, body: { access_token: "ghp_tok", scope: "repo", token_type: "bearer" } },
-      { status: 200, body: { login: "octocat", id: 1 } },
-    ]);
-
-    await auth.exchangeCode("code", state);
-
-    // Second use of the same state must fail
-    global.fetch = mockFetchSequence([
-      { status: 200, body: { access_token: "ghp_tok2", scope: "repo", token_type: "bearer" } },
-      { status: 200, body: { login: "octocat", id: 1 } },
-    ]);
-
-    await expect(auth.exchangeCode("code2", state)).rejects.toThrow(/invalid or expired/i);
+    expect(result.content).toMatch(/invalid or expired/i);
+    expect(result.content).toMatch(/github_token/);
   });
 });
 
-describe("createAuthManager - checkAuth", () => {
-  it("returns authenticated: false when no token", async () => {
-    const sdk = makeSdk({ storedToken: null });
-    const auth = createAuthManager(sdk);
-
-    const mockClient = {
-      isAuthenticated: () => false,
-      get: vi.fn(),
-    };
-
-    const result = await auth.checkAuth(mockClient);
-    expect(result.authenticated).toBe(false);
-    expect(mockClient.get).not.toHaveBeenCalled();
+describe("tools() export", () => {
+  it("returns 14 tools", () => {
+    const sdk = makeSdk("ghp_test");
+    const toolList = tools(sdk);
+    expect(toolList).toHaveLength(14);
   });
 
-  it("returns user info when authenticated", async () => {
-    const sdk = makeSdk({ storedToken: "ghp_valid" });
-    const auth = createAuthManager(sdk);
-
-    const mockClient = {
-      isAuthenticated: () => true,
-      get: vi.fn().mockResolvedValue({
-        login: "octocat",
-        id: 1,
-        name: "The Octocat",
-        email: null,
-        avatar_url: "https://avatars.githubusercontent.com/u/583231",
-      }),
-    };
-
-    const result = await auth.checkAuth(mockClient);
-    expect(result.authenticated).toBe(true);
-    expect(result.user_login).toBe("octocat");
-    expect(result.avatar_url).toContain("avatars.githubusercontent.com");
+  it("all tools have name, description, parameters, and execute", () => {
+    const sdk = makeSdk("ghp_test");
+    const toolList = tools(sdk);
+    for (const tool of toolList) {
+      expect(typeof tool.name).toBe("string");
+      expect(typeof tool.description).toBe("string");
+      expect(typeof tool.execute).toBe("function");
+      expect(tool.parameters).toBeDefined();
+    }
   });
 
-  it("removes stale token on 401 and returns unauthenticated", async () => {
-    const sdk = makeSdk({ storedToken: "ghp_expired" });
-    const auth = createAuthManager(sdk);
-
-    const err = new Error("Bad credentials");
-    err.status = 401;
-
-    const mockClient = {
-      isAuthenticated: () => true,
-      get: vi.fn().mockRejectedValue(err),
-    };
-
-    const result = await auth.checkAuth(mockClient);
-    expect(result.authenticated).toBe(false);
-    expect(sdk.secrets._map.has("github_access_token")).toBe(false);
-  });
-});
-
-describe("createAuthManager - revokeToken", () => {
-  it("removes token from sdk.secrets", async () => {
-    const sdk = makeSdk({ storedToken: "ghp_torevoke" });
-    const auth = createAuthManager(sdk);
-
-    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
-
-    const result = await auth.revokeToken();
-    expect(result.revoked).toBe(true);
-    expect(sdk.secrets._map.has("github_access_token")).toBe(false);
-  });
-
-  it("returns revoked: false when no token to revoke", async () => {
-    const sdk = makeSdk({ storedToken: null });
-    const auth = createAuthManager(sdk);
-
-    const result = await auth.revokeToken();
-    expect(result.revoked).toBe(false);
-  });
-
-  it("still removes local token even if GitHub revoke API call fails", async () => {
-    const sdk = makeSdk({ storedToken: "ghp_torevoke" });
-    const auth = createAuthManager(sdk);
-
-    global.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
-
-    const result = await auth.revokeToken();
-    expect(result.revoked).toBe(true);
-    expect(sdk.secrets._map.has("github_access_token")).toBe(false);
+  it("all tool names are prefixed with github_", () => {
+    const sdk = makeSdk("ghp_test");
+    const toolList = tools(sdk);
+    for (const tool of toolList) {
+      expect(tool.name).toMatch(/^github_/);
+    }
   });
 });

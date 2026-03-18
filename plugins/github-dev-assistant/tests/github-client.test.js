@@ -15,7 +15,7 @@ import { createGitHubClient } from "../lib/github-client.js";
 function makeSdk(token = "ghp_testtoken123") {
   return {
     secrets: {
-      get: (key) => (key === "github_access_token" ? token : null),
+      get: (key) => (key === "github_token" ? token : null),
       set: vi.fn(),
       delete: vi.fn(),
     },
