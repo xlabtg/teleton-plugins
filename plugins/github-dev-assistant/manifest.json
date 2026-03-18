@@ -3,7 +3,7 @@
   "name": "GitHub Dev Assistant",
   "version": "2.0.0",
   "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via Personal Access Token",
-  "author": { "name": "xlabtg", "url": "https://github.com/xlabtg" },
+  "author": "xlabtg",
   "license": "MIT",
   "entry": "index.js",
   "teleton": ">=1.0.0",

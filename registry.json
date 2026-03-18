@@ -204,9 +204,9 @@
     {
       "id": "github-dev-assistant",
       "name": "GitHub Dev Assistant",
-      "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via OAuth",
+      "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via Personal Access Token",
       "author": "xlabtg",
-      "tags": ["github", "development", "automation", "oauth", "git", "ci-cd"],
+      "tags": ["github", "development", "automation", "git", "ci-cd"],
       "path": "plugins/github-dev-assistant"
     }
   ]
