@@ -5,13 +5,6 @@ Works in DMs, groups, and channels.
 
 TON Bridge works with support from TONBANKCARD.
 
-## Features
-
-- Sends a message with a URL inline button directly to the current chat
-- Button text controllable per tool call (the LLM can omit or include emoji)
-- Customizable default button text via config
-- Custom message support
-
 ## Tools
 
 | Tool | Description | Category |
@@ -20,14 +13,26 @@ TON Bridge works with support from TONBANKCARD.
 | `ton_bridge_about` | Send info about TON Bridge with a Mini App button | data-bearing |
 | `ton_bridge_custom_message` | Send a custom message alongside a TON Bridge button | action |
 
-## Installation
+## Install
 
 ```bash
 mkdir -p ~/.teleton/plugins
 cp -r plugins/ton-bridge ~/.teleton/plugins/
 ```
 
+Restart Teleton — the plugin is auto-loaded from `~/.teleton/plugins/`. No changes to `config.yaml` are required.
+
+## Usage examples
+
+- "Open TON Bridge"
+- "Tell me about TON Bridge"
+- "Send a message about TON Bridge with a button"
+- "Open TON Bridge, no emoji on the button"
+- "Share a TON Bridge link with the text: Transfer your assets seamlessly"
+
 ## Configuration
+
+Configuration is optional — the plugin works out of the box with defaults. Override in `config.yaml` only if needed:
 
 ```yaml
 # ~/.teleton/config.yaml
@@ -37,37 +42,13 @@ plugins:
     startParam: ""                 # Optional start parameter appended to the Mini App URL
 ```
 
-> **Note:** Emoji on the button is controlled by the agent at call time via the `buttonText` parameter, not by config. This allows the agent to send buttons with or without emoji as requested by the user.
+> **Note:** Button emoji is controlled by the agent at call time via the `buttonText` parameter, not by config. This allows the agent to include or omit emoji as requested by the user.
 
-## Usage Examples
-
-### Open TON Bridge
-```
-Open TON Bridge
-```
-
-Sends a message with a button linking to `https://t.me/TONBridge_robot?startapp`.
-
-### Open TON Bridge without emoji on button
-```
-Open TON Bridge, no emoji on the button
-```
-
-The agent will call `ton_bridge_open` with `buttonText: "TON Bridge No1"` (no emoji).
-
-### Get Info About TON Bridge
-```
-Tell me about TON Bridge
-```
-
-### Custom Message with Button
-```
-Send "Transfer your assets via TON Bridge" with a TON Bridge button
-```
-
-## Tool Schemas
+## Tool schemas
 
 ### `ton_bridge_open`
+
+Send a message with a TON Bridge Mini App button. Use when the user asks to open or access TON Bridge.
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -76,11 +57,15 @@ Send "Transfer your assets via TON Bridge" with a TON Bridge button
 
 ### `ton_bridge_about`
 
+Send an info message about TON Bridge with a Mini App button. Use when the user asks about TON Bridge.
+
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 
 ### `ton_bridge_custom_message`
+
+Send a custom message alongside a TON Bridge button.
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
