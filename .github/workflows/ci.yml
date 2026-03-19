@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  build-runtime:
+    name: Build (Runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dev dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install plugin dependencies
+        run: |
+          for pkg in plugins/*/package.json; do
+            dir=$(dirname "$pkg")
+            if [ -f "$dir/package-lock.json" ]; then
+              npm ci --ignore-scripts --no-audit --no-fund --prefix "$dir"
+            fi
+          done
+
+      - name: Validate plugins load (Runtime)
+        run: node scripts/validate-plugins.mjs
+
+  build-sdk:
+    name: Build (SDK with DTS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dev dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install plugin dependencies
+        run: |
+          for pkg in plugins/*/package.json; do
+            dir=$(dirname "$pkg")
+            if [ -f "$dir/package-lock.json" ]; then
+              npm ci --ignore-scripts --no-audit --no-fund --prefix "$dir"
+            fi
+          done
+
+      - name: Build SDK plugins and generate type declarations
+        run: node scripts/build-sdk.mjs
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dev dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Lint
+        run: npm run lint
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dev dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install plugin dependencies
+        run: |
+          for pkg in plugins/*/package.json; do
+            dir=$(dirname "$pkg")
+            if [ -f "$dir/package-lock.json" ]; then
+              npm ci --ignore-scripts --no-audit --no-fund --prefix "$dir"
+            fi
+          done
+
+      - name: Run tests
+        run: node scripts/run-tests.mjs
+
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install root dev dependencies
+        run: npm ci --ignore-scripts
+
+      - name: TypeScript type check
+        run: npm run typecheck

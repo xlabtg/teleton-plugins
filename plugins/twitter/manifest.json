@@ -41,6 +41,7 @@
     { "name": "twitter_bookmark", "description": "Bookmark a tweet (OAuth)" },
     { "name": "twitter_remove_bookmark", "description": "Remove a bookmark (OAuth)" }
   ],
+  "permissions": [],
   "tags": ["social", "twitter", "x", "search", "trends", "oauth"],
   "repository": "https://github.com/TONresistor/teleton-plugins",
   "funding": null
