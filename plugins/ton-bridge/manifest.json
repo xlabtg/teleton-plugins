@@ -18,7 +18,6 @@
   ],
   "defaultConfig": {
     "buttonText": "TON Bridge No1",
-    "buttonEmoji": "🌉",
     "startParam": ""
   },
   "permissions": [],
