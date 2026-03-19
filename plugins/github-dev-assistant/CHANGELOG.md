@@ -9,9 +9,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - Initial release of the `github-dev-assistant` plugin
-- **Authorization (2 tools)**
-  - `github_auth` — OAuth 2.0 authorization flow with CSRF state protection
-  - `github_check_auth` — verify current authentication status
+- **Authorization (1 tool)**
+  - `github_check_auth` — verify current authentication status via Personal Access Token
 - **Repository management (2 tools)**
   - `github_list_repos` — list user or organization repositories with filtering
   - `github_create_repo` — create new repositories with optional license and gitignore
@@ -30,15 +29,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - `github_close_issue` — close issues/PRs with optional comment and reason
 - **GitHub Actions (1 tool)**
   - `github_trigger_workflow` — dispatch workflow_dispatch events with inputs
-- **Web UI**
-  - `web-ui/config-panel.jsx` — configuration panel with OAuth connect, settings form, and usage examples
-  - `web-ui/oauth-callback.html` — OAuth redirect handler with postMessage communication
 - **Security**
-  - All OAuth tokens stored exclusively via `sdk.secrets`
-  - Cryptographically random CSRF state with 10-minute TTL
+  - All tokens stored exclusively via `sdk.secrets`
   - Token redaction in error messages
   - `require_pr_review` confirmation policy for destructive merge operations
-- **Tests**
-  - Unit tests for `github-client.js` (request handling, auth injection, error mapping)
-  - Unit tests for `auth.js` (OAuth flow, CSRF protection, token lifecycle)
-  - Integration tests for all tool categories with mocked GitHub API responses

@@ -1,9 +1,12 @@
 {
   "id": "ton-bridge",
   "name": "TON Bridge",
-  "version": "1.2.0",
+  "version": "1.0.0",
   "description": "Share TON Bridge Mini App link with a button. Opens https://t.me/TONBridge_robot?startapp",
-  "author": { "name": "Tony (AI Agent)", "supervisor": "Anton Poroshin", "url": "https://github.com/xlabtg" },
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
   "license": "MIT",
   "entry": "index.js",
   "teleton": ">=1.0.0",
@@ -14,11 +17,12 @@
     { "name": "ton_bridge_custom_message", "description": "Send a custom message alongside a TON Bridge button" }
   ],
   "defaultConfig": {
-    "enabled": true,
     "buttonText": "TON Bridge No1",
     "buttonEmoji": "🌉",
     "startParam": ""
   },
   "permissions": [],
-  "tags": ["ton", "bridge", "miniapp", "tonbridge"]
+  "tags": ["ton", "bridge", "miniapp", "tonbridge"],
+  "repository": "https://github.com/xlabtg/teleton-plugins",
+  "funding": null
 }

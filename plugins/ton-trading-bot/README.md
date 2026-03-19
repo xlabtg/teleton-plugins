@@ -2,10 +2,7 @@
 
 Atomic tools for trading on the TON blockchain. The LLM composes these tools into trading strategies — the plugin provides the primitives, not the logic.
 
-**⚠️ WARNING: Cryptocurrency trading involves significant financial risk. Do not trade with funds you cannot afford to lose. This plugin does not provide financial advice.**
-
-**Developed by Tony (AI Agent) under supervision of Anton Poroshin**
-**Studio:** https://github.com/xlabtg
+**WARNING: Cryptocurrency trading involves significant financial risk. Do not trade with funds you cannot afford to lose. This plugin does not provide financial advice.**
 
 ## Architecture
 
@@ -48,7 +45,7 @@ cp -r plugins/ton-trading-bot ~/.teleton/plugins/
 ```yaml
 # ~/.teleton/config.yaml
 plugins:
-  ton-trading-bot:
+  ton_trading_bot:
     maxTradePercent: 10        # max single trade as % of balance (default: 10)
     minBalanceTON: 1           # minimum TON to keep (default: 1)
     defaultSlippage: 0.05      # DEX slippage tolerance (default: 5%)
@@ -82,6 +79,57 @@ Get market data for swapping 1 TON to EQCxE6...
 5. [later] Record trade closed
 ```
 
+## Tool Schemas
+
+### `ton_trading_get_market_data`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `from_asset` | string | Yes | — | Asset to swap from ("TON" or jetton address) |
+| `to_asset` | string | Yes | — | Asset to swap to ("TON" or jetton address) |
+| `amount` | string | Yes | — | Amount of from_asset to quote |
+
+### `ton_trading_get_portfolio`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `history_limit` | integer | No | 10 | Number of recent trades to include (1–50) |
+
+### `ton_trading_validate_trade`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | Yes | — | "real" or "simulation" |
+| `amount_ton` | number | Yes | — | Amount of TON being traded |
+
+### `ton_trading_simulate_trade`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `from_asset` | string | Yes | — | Asset being sold |
+| `to_asset` | string | Yes | — | Asset being bought |
+| `amount_in` | number | Yes | — | Amount of from_asset to trade |
+| `expected_amount_out` | number | Yes | — | Expected output amount |
+| `note` | string | No | — | Optional note for the trade |
+
+### `ton_trading_execute_swap`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `from_asset` | string | Yes | — | Asset to sell |
+| `to_asset` | string | Yes | — | Asset to buy |
+| `amount` | string | Yes | — | Amount to sell |
+| `slippage` | number | No | 0.05 | Slippage tolerance (0.001–0.5) |
+| `dex` | string | No | auto | "stonfi" or "dedust" |
+
+### `ton_trading_record_trade`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `trade_id` | integer | Yes | — | Journal trade ID |
+| `amount_out` | number | Yes | — | Actual amount received |
+| `note` | string | No | — | Optional note (e.g. exit reason) |
+
 ## Risk Management
 
 Risk parameters are enforced by `ton_trading_validate_trade` before any trade:
@@ -103,6 +151,4 @@ The LLM reads the validation result and decides whether to proceed.
 
 ---
 
-**Developed by:** Tony (AI Agent)
-**Supervisor:** Anton Poroshin
-**Studio:** https://github.com/xlabtg
+**Developer:** [xlabtg](https://github.com/xlabtg)

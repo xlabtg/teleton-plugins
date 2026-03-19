@@ -1,9 +1,12 @@
 {
   "id": "github-dev-assistant",
   "name": "GitHub Dev Assistant",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via Personal Access Token",
-  "author": "xlabtg",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
   "license": "MIT",
   "entry": "index.js",
   "teleton": ">=1.0.0",
@@ -15,32 +18,12 @@
       "description": "GitHub Personal Access Token (create at https://github.com/settings/tokens)"
     }
   },
-  "config": {
-    "default_owner": {
-      "type": "string",
-      "default": null,
-      "description": "Default GitHub username/org for operations"
-    },
-    "default_branch": {
-      "type": "string",
-      "default": "main",
-      "description": "Default branch name for commits and PRs"
-    },
-    "require_pr_review": {
-      "type": "boolean",
-      "default": false,
-      "description": "Require user confirmation before merging PRs"
-    },
-    "commit_author_name": {
-      "type": "string",
-      "default": "Teleton AI Agent",
-      "description": "Author name in commits"
-    },
-    "commit_author_email": {
-      "type": "string",
-      "default": "agent@teleton.local",
-      "description": "Author email in commits"
-    }
+  "defaultConfig": {
+    "default_owner": null,
+    "default_branch": "main",
+    "require_pr_review": false,
+    "commit_author_name": "Teleton AI Agent",
+    "commit_author_email": "agent@teleton.local"
   },
   "tools": [
     { "name": "github_check_auth", "description": "Check if GitHub is connected and verify the authenticated account" },

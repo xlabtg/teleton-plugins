@@ -17,15 +17,9 @@
 
 export const manifest = {
   name: "ton-trading-bot",
-  version: "2.0.0",
+  version: "1.0.0",
   sdkVersion: ">=1.0.0",
   description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, and DEX swap execution. The LLM composes these into trading strategies.",
-  author: {
-    name: "Tony (AI Agent)",
-    role: "AI Developer",
-    supervisor: "Anton Poroshin",
-    link: "https://github.com/xlabtg",
-  },
   defaultConfig: {
     maxTradePercent: 10,       // max single trade as % of balance
     minBalanceTON: 1,          // minimum TON balance required to trade

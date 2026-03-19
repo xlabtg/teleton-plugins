@@ -1,138 +1,79 @@
-# TON Bridge Plugin
+# TON Bridge
 
-**The #1 Bridge in TON Catalog** 🌉
+Share the TON Bridge Mini App link with a beautiful inline button in Telegram chats.
 
-Beautiful inline button plugin for TON Bridge Mini App access.
-
-**⚠️ Note:** TON Bridge works with support from TONBANKCARD
+TON Bridge works with support from TONBANKCARD.
 
 ## Features
 
-- ✅ Beautiful inline button (no emoji)
-- ✅ Button text: "TON Bridge No1" (customizable)
-- ✅ Mini App URL: https://t.me/TONBridge_robot?startapp
-- ✅ Custom message support
-- ✅ Configuration options
-- ✅ Easy integration with AI agents
+- Inline button for TON Bridge Mini App access
+- Customizable button text and emoji
+- Custom message support
+- Easy integration with AI agents
 
 ## Tools
 
 | Tool | Description | Category |
 |------|-------------|----------|
-| `ton_bridge_open` | Open TON Bridge with beautiful button | Action |
-| `ton_bridge_about` | Send info about TON Bridge with a link to the Mini App | Data-bearing |
-| `ton_bridge_custom_message` | Send custom message with button | Action |
+| `ton_bridge_open` | Send a message with a TON Bridge Mini App link | action |
+| `ton_bridge_about` | Send info about TON Bridge with a link to the Mini App | data-bearing |
+| `ton_bridge_custom_message` | Send a custom message alongside a TON Bridge button | action |
 
 ## Installation
 
 ```bash
+mkdir -p ~/.teleton/plugins
 cp -r plugins/ton-bridge ~/.teleton/plugins/
 ```
 
 ## Configuration
 
-Edit `~/.teleton/config.yaml`:
-
 ```yaml
+# ~/.teleton/config.yaml
 plugins:
-  ton-bridge:
-    enabled: true
+  ton_bridge:
     buttonText: "TON Bridge No1"  # Button text (default: "TON Bridge No1")
-    buttonEmoji: ""                # Emoji on button (default: empty - no icon)
+    buttonEmoji: "🌉"             # Emoji on button (default: "🌉")
     startParam: ""                 # Optional start parameter
 ```
 
 ## Usage Examples
 
-### Basic Usage
-
+### Open TON Bridge
 ```
-"Открой TON Bridge с красивой кнопкой"
-```
-
-Will send:
-> 🌉 **TON Bridge** - The #1 Bridge in TON Catalog
->
-> [TON Bridge No1](https://t.me/TONBridge_robot?startapp)
-
-### Custom Message
-
-```
-"Дай мне ссылку на TON Bridge с кнопкой"
+Open TON Bridge
 ```
 
-### Get Button Configuration
+Will send a message with a button linking to https://t.me/TONBridge_robot?startapp
 
+### Get Info About TON Bridge
 ```
-"Какой текст кнопки сейчас настроен для TON Bridge?"
-```
-
-Will return:
-```json
-{
-  "button_text": "TON Bridge No1",
-  "button_emoji": "",
-  "mini_app_url": "https://t.me/TONBridge_robot?startapp"
-}
+Tell me about TON Bridge
 ```
 
 ### Custom Message with Button
-
 ```
-"Напиши 'Хочу мостить в TON' и добавь кнопку TON Bridge"
-```
-
-Will send:
-> Хочу мостить в TON
->
-> [TON Bridge No1](https://t.me/TONBridge_robot?startapp)
-
-## Default Button Appearance
-
-Button will look like this:
-
-```
-TON Bridge No1
+Send "Transfer your assets via TON Bridge" with a TON Bridge button
 ```
 
-When clicked, it opens:
-https://t.me/TONBridge_robot?startapp
+## Tool Schemas
 
-## Customization
+### `ton_bridge_open`
 
-You can customize the button text (emoji is empty by default):
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `message` | string | No | — | Optional message text to show with the button |
 
-```yaml
-plugins:
-  ton-bridge:
-    buttonText: "TON Bridge"
-    buttonEmoji: ""
-```
+### `ton_bridge_about`
 
-Or add emoji back if needed:
+No parameters required.
 
-```yaml
-plugins:
-  ton-bridge:
-    buttonText: "TON Bridge 🌉"
-    buttonEmoji: "🌉"
-```
+### `ton_bridge_custom_message`
 
-## Why "No1"?
-
-As per your request, the button text is "TON Bridge No1" to highlight that this is the #1 bridge in TON catalog according to your preference.
-
-## TONBANKCARD Support
-
-**TON Bridge works with support from TONBANKCARD**
-
-This is important to note because:
-- TONBANKCARD provides infrastructure support
-- Makes bridge operations more reliable
-- Compatible with TON ecosystem
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `customMessage` | string | Yes | — | Custom message text to display with the button |
 
 ---
 
-**Developed by:** Tony (AI Agent)
-**Supervisor:** Anton Poroshin
-**Studio:** https://github.com/xlabtg
+**Developer:** [xlabtg](https://github.com/xlabtg)

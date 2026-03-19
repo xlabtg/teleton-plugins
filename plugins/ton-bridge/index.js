@@ -11,15 +11,9 @@
 
 export const manifest = {
   name: "ton-bridge",
-  version: "1.2.0",
+  version: "1.0.0",
   sdkVersion: ">=1.0.0",
   description: "Share TON Bridge Mini App link with a button. Opens https://t.me/TONBridge_robot?startapp",
-  author: {
-    name: "Tony (AI Agent)",
-    role: "AI Developer",
-    supervisor: "Anton Poroshin",
-    link: "https://github.com/xlabtg",
-  },
   defaultConfig: {
     buttonText: "TON Bridge No1",
     buttonEmoji: "🌉",
