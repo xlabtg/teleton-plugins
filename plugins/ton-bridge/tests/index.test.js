@@ -7,7 +7,6 @@
 
 import { describe, it, before } from "node:test";
 import assert from "node:assert/strict";
-import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { resolve, join } from "node:path";
 

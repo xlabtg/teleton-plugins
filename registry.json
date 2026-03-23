@@ -196,7 +196,7 @@
     {
       "id": "ton-bridge",
       "name": "TON Bridge",
-      "description": "Beautiful inline button plugin for TON Bridge Mini App access",
+      "description": "Share TON Bridge Mini App link with a button. Opens https://t.me/TONBridge_robot?startapp",
       "author": "xlabtg",
       "tags": ["ton", "bridge", "miniapp", "tool", "tonbridge"],
       "path": "plugins/ton-bridge"
