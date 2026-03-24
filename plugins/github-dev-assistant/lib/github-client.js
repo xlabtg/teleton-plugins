@@ -15,7 +15,7 @@
  * client instances automatically pick up updated tokens.
  */
 
-import { formatError, createRateLimiter, parseLinkHeader } from "./utils.js";
+import { createRateLimiter, parseLinkHeader } from "./utils.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
 
@@ -88,7 +88,7 @@ export function createGitHubClient(sdk) {
       signal: AbortSignal.timeout(20000),
     };
 
-    if (body !== null && ["POST", "PUT", "PATCH"].includes(opts.method)) {
+    if (body !== null && ["POST", "PUT", "PATCH", "DELETE"].includes(opts.method)) {
       opts.body = JSON.stringify(body);
     }
 
@@ -194,10 +194,11 @@ export function createGitHubClient(sdk) {
     /**
      * DELETE request.
      * @param {string} path
+     * @param {object|null} [body] - Optional JSON body (required by some GitHub endpoints, e.g. delete file)
      * @returns {Promise<any>}
      */
-    async delete(path) {
-      const { data } = await request("DELETE", path);
+    async delete(path, body = null) {
+      const { data } = await request("DELETE", path, body);
       return data;
     },
 
@@ -210,6 +211,54 @@ export function createGitHubClient(sdk) {
     async postRaw(path, body) {
       const { status, data } = await request("POST", path, body);
       return { status, data };
+    },
+
+    /**
+     * GraphQL request to GitHub API.
+     * @param {string} query - GraphQL query string
+     * @param {object} [variables] - GraphQL variables
+     * @returns {Promise<any>} Response data (full GraphQL response including data and errors)
+     */
+    async graphql(query, variables = {}) {
+      await rateLimiter.wait();
+
+      const token = getAccessToken();
+      const headers = {
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "teleton-github-dev-assistant/1.0.0",
+      };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const res = await fetch("https://api.github.com/graphql", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(20000),
+      });
+
+      const responseText = await res.text();
+      let responseData;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        responseData = responseText;
+      }
+
+      if (!res.ok) {
+        const ghMessage =
+          typeof responseData === "object" && responseData?.message
+            ? responseData.message
+            : responseText.slice(0, 200);
+        const err = new Error(`GitHub GraphQL error ${res.status}: ${ghMessage}`);
+        err.status = res.status;
+        throw err;
+      }
+
+      return responseData;
     },
 
     /** Check if authenticated (token is present in secrets) */
