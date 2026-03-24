@@ -3,8 +3,8 @@
 # teleton-plugins
 
 [![GitHub stars](https://img.shields.io/github/stars/TONresistor/teleton-plugins?style=flat&logo=github)](https://github.com/TONresistor/teleton-plugins/stargazers)
-[![Plugins](https://img.shields.io/badge/plugins-26-8B5CF6.svg)](#available-plugins)
-[![Tools](https://img.shields.io/badge/tools-189-E040FB.svg)](#available-plugins)
+[![Plugins](https://img.shields.io/badge/plugins-28-8B5CF6.svg)](#available-plugins)
+[![Tools](https://img.shields.io/badge/tools-249-E040FB.svg)](#available-plugins)
 [![SDK](https://img.shields.io/badge/SDK-v1.0.0-00C896.svg)](#plugin-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -76,7 +76,7 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 ## Available Plugins
 
-> **26 plugins** · **189 tools** · [Browse the registry](registry.json)
+> **28 plugins** · **249 tools** · [Browse the registry](registry.json)
 
 ### DeFi & Trading
 
@@ -115,6 +115,7 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 | Plugin | Description | Tools | Author |
 |--------|-------------|:-----:|--------|
+| [ton-bridge](plugins/ton-bridge/) | Share TON Bridge Mini App link with an inline button | 3 | xlabtg |
 | [multisend](plugins/multisend/) | Batch send TON/jettons to 254 recipients in one TX | 5 | teleton |
 | [sbt](plugins/sbt/) | Deploy and mint Soulbound Tokens (TEP-85) | 2 | teleton |
 
@@ -124,6 +125,12 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 |--------|-------------|:-----:|--------|
 | [fragment](plugins/fragment/) | Fragment marketplace — usernames, numbers, collectible gifts | 6 | teleton |
 | [webdom](plugins/webdom/) | TON domain marketplace — search, buy, sell, auction, DNS bid | 12 | teleton |
+
+### Developer Tools
+
+| Plugin | Description | Tools | Author |
+|--------|-------------|:-----:|--------|
+| [github-dev-assistant](plugins/github-dev-assistant/) | Complete GitHub workflow — repos, files, branches, PRs, issues, Actions, security, discussions | 57 | xlabtg |
 
 ### Utilities & Games
 

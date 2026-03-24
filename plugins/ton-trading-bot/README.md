@@ -33,12 +33,14 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_execute_swap` | Execute a real swap on STON.fi or DeDust (DM-only) | action |
 | `ton_trading_record_trade` | Close a trade and record final output / PnL | action |
 
-## Installation
+## Install
 
 ```bash
 mkdir -p ~/.teleton/plugins
 cp -r plugins/ton-trading-bot ~/.teleton/plugins/
 ```
+
+Restart Teleton — the plugin is auto-loaded from `~/.teleton/plugins/`.
 
 ## Configuration
 
@@ -52,13 +54,14 @@ plugins:
     simulationBalance: 1000    # starting virtual balance (default: 1000 TON)
 ```
 
-## Usage Examples
+## Usage
 
-### Check the market
-
-```
-Get market data for swapping 1 TON to EQCxE6...
-```
+- "Get market data for swapping 1 TON to USDT"
+- "Show my portfolio"
+- "Validate trading 5 TON in simulation mode"
+- "Simulate buying USDT with 5 TON"
+- "Execute swap: 2 TON → USDT with 5% slippage"
+- "Record trade #3 closed at 2.1 USDT"
 
 ### Paper-trade workflow
 
@@ -79,7 +82,7 @@ Get market data for swapping 1 TON to EQCxE6...
 5. [later] Record trade closed
 ```
 
-## Tool Schemas
+## Schemas
 
 ### `ton_trading_get_market_data`
 
