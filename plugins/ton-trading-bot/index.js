@@ -101,7 +101,7 @@ export const tools = (sdk) => [
       },
       required: ["from_asset", "to_asset", "amount"],
     },
-    execute: async (params, context) => {
+    execute: async (params, _context) => {
       const { from_asset, to_asset, amount } = params;
       try {
         const [tonPrice, dexQuote] = await Promise.all([
@@ -163,7 +163,7 @@ export const tools = (sdk) => [
         },
       },
     },
-    execute: async (params, context) => {
+    execute: async (params, _context) => {
       const limit = params.history_limit ?? 10;
       try {
         const [tonBalance, jettonBalances] = await Promise.all([
@@ -223,7 +223,7 @@ export const tools = (sdk) => [
       },
       required: ["mode", "amount_ton"],
     },
-    execute: async (params, context) => {
+    execute: async (params, _context) => {
       const { mode, amount_ton } = params;
       try {
         const balance =
@@ -310,7 +310,7 @@ export const tools = (sdk) => [
       },
       required: ["from_asset", "to_asset", "amount_in", "expected_amount_out"],
     },
-    execute: async (params, context) => {
+    execute: async (params, _context) => {
       const { from_asset, to_asset, amount_in, expected_amount_out, note } = params;
       try {
         const simBalance = getSimBalance(sdk);
@@ -508,7 +508,7 @@ export const tools = (sdk) => [
       },
       required: ["trade_id", "amount_out"],
     },
-    execute: async (params, context) => {
+    execute: async (params, _context) => {
       const { trade_id, amount_out, note } = params;
       try {
         const entry = sdk.db
