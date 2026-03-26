@@ -8,8 +8,8 @@ Complete GitHub development workflow automation for the [Teleton](https://github
 |----------|-------|
 | **Authorization** | `github_check_auth` |
 | **Repositories** | `github_list_repos`, `github_create_repo`, `github_fork_repo`, `github_search_repos`, `github_list_branches`, `github_push_files`, `github_get_repo_tree`, `github_list_tags`, `github_list_releases`, `github_get_latest_release` |
-| **Files & Branches** | `github_get_file`, `github_update_file`, `github_create_branch`, `github_delete_file`, `github_list_directory`, `github_search_code`, `github_download_file` |
-| **Pull Requests** | `github_create_pr`, `github_list_prs`, `github_merge_pr`, `github_list_comments`, `github_list_pull_request_reviews`, `github_search_issues`, `github_update_pr`, `github_add_pr_review` |
+| **Files & Branches** | `github_get_file`, `github_update_file`, `github_create_branch`, `github_delete_file`, `github_list_directory`, `github_list_files`, `github_search_code`, `github_download_file` |
+| **Pull Requests** | `github_create_pr`, `github_list_prs`, `github_get_pull_request`, `github_merge_pr`, `github_list_comments`, `github_list_pull_request_reviews`, `github_search_issues`, `github_update_pr`, `github_add_pr_review` |
 | **Issues** | `github_create_issue`, `github_list_issues`, `github_comment_issue`, `github_close_issue`, `github_update_issue`, `github_reopen_issue`, `github_assign_issue` |
 | **Commits** | `github_list_commits`, `github_get_commit` |
 | **GitHub Actions** | `github_trigger_workflow`, `github_list_workflows`, `github_list_workflow_runs`, `github_cancel_workflow_run`, `github_get_job_logs` |
@@ -19,7 +19,7 @@ Complete GitHub development workflow automation for the [Teleton](https://github
 | **Security** | `github_list_code_scanning_alerts`, `github_list_dependabot_alerts` |
 | **Discussions** | `github_list_discussions`, `github_get_discussion` |
 
-**57 tools total** covering the complete GitHub development lifecycle.
+**60 tools total** covering the complete GitHub development lifecycle.
 
 ## Installation
 
@@ -261,6 +261,9 @@ Delete a file from a repository. Parameters: `owner`, `repo`, `path`, `sha`, `me
 ### `github_list_directory`
 List contents of a directory. Parameters: `owner`, `repo`, `path` (all required), `ref`.
 
+### `github_list_files`
+List files and subdirectories in a repository path. Equivalent to `github_list_directory` — use whichever feels more natural. Parameters: `owner`, `repo` (both required), `path` (defaults to repo root), `ref`.
+
 ### `github_search_code`
 Search for code patterns within a repository. Parameters: `owner`, `repo`, `query` (all required), `per_page`, `page`.
 
@@ -272,6 +275,9 @@ Create a pull request. Parameters: `owner`, `repo`, `title`, `head` (all require
 
 ### `github_list_prs`
 List pull requests. Parameters: `owner`, `repo` (both required), `state`, `head`, `base`, `sort`, `direction`, `per_page`, `page`.
+
+### `github_get_pull_request`
+Get detailed information about a specific pull request, including title, body, state, draft/merged status, head/base branches, author, assignees, labels, review decision, requested reviewers, and change stats (commits, additions, deletions, changed files). Parameters: `owner`, `repo`, `pull_number` (all required).
 
 ### `github_merge_pr`
 Merge a pull request. Parameters: `owner`, `repo`, `pr_number` (all required), `merge_method`, `commit_title`, `commit_message`, `confirmed`.
@@ -386,6 +392,10 @@ List discussions in a GitHub repository. Parameters: `owner`, `repo` (both requi
 
 ### `github_get_discussion`
 Get a specific GitHub discussion with its body and comments. Parameters: `owner`, `repo`, `discussion_number` (all required).
+
+## Agent Guide
+
+For a complete agent-oriented reference — including natural-language example commands, workflow templates, and troubleshooting tips for all 60 tools — see **[GUIDE.md](./GUIDE.md)**.
 
 ## Developer
 
