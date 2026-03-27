@@ -14,12 +14,28 @@ This plugin follows the Teleton tool-provider pattern:
 Each tool does exactly one thing. The LLM composes them:
 
 ```
-1. ton_trading_get_market_data   → see current prices and DEX quotes
-2. ton_trading_get_portfolio     → see wallet balance and open positions
-3. ton_trading_validate_trade    → check risk before acting
-4. ton_trading_simulate_trade    → paper-trade without real funds
-5. ton_trading_execute_swap      → execute a real DEX swap (DM-only)
-6. ton_trading_record_trade      → close a trade and log PnL
+ 1. ton_trading_get_market_data              → see current prices and DEX quotes
+ 2. ton_trading_get_portfolio                → see wallet balance and open positions
+ 3. ton_trading_validate_trade               → check risk before acting
+ 4. ton_trading_simulate_trade               → paper-trade without real funds
+ 5. ton_trading_execute_swap                 → execute a real DEX swap (DM-only)
+ 6. ton_trading_record_trade                 → close a trade and log PnL
+ 7. ton_trading_get_arbitrage_opportunities  → find cross-DEX price differences
+ 8. ton_trading_get_token_listings           → fetch recently listed tokens for sniping
+ 9. ton_trading_get_token_info               → detailed token price, market cap, holders
+10. ton_trading_validate_token               → safety-check a token before sniping
+11. ton_trading_get_top_traders              → find top-performing wallets for copy trading
+12. ton_trading_get_trader_performance       → analyse on-chain performance of a wallet
+13. ton_trading_get_active_pools             → list active liquidity pools by volume
+14. ton_trading_get_farms_with_apy           → list yield farming opportunities with APY
+15. ton_trading_get_pool_volume              → detailed volume stats for a specific pool
+16. ton_trading_backtest                     → replay a strategy against trade history
+17. ton_trading_calculate_risk_metrics       → VaR, drawdown, Sharpe, win/loss stats
+18. ton_trading_set_stop_loss                → register stop-loss and take-profit rules
+19. ton_trading_check_stop_loss              → query active rules and detect triggered ones
+20. ton_trading_get_optimal_position_size    → Kelly Criterion and fixed-fraction sizing
+21. ton_trading_schedule_trade               → store a pending trade for future execution
+22. ton_trading_get_scheduled_trades         → list pending scheduled trades
 ```
 
 ## Tools
@@ -32,6 +48,22 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_simulate_trade` | Paper-trade using virtual balance (no real funds) | action |
 | `ton_trading_execute_swap` | Execute a real swap on STON.fi or DeDust (DM-only) | action |
 | `ton_trading_record_trade` | Close a trade and record final output / PnL | action |
+| `ton_trading_get_arbitrage_opportunities` | Find cross-DEX price differences for a token pair | data-bearing |
+| `ton_trading_get_token_listings` | Fetch recently listed tokens on TON DEXes for sniping | data-bearing |
+| `ton_trading_get_token_info` | Detailed token info: price, market cap, holders, volume | data-bearing |
+| `ton_trading_validate_token` | Safety-check a token: liquidity, volume, rug-pull signals | data-bearing |
+| `ton_trading_get_top_traders` | Find top-performing trader wallets ranked by win rate | data-bearing |
+| `ton_trading_get_trader_performance` | Analyse on-chain trading performance of a wallet | data-bearing |
+| `ton_trading_get_active_pools` | List active liquidity pools sorted by 24-h volume | data-bearing |
+| `ton_trading_get_farms_with_apy` | List yield farming opportunities with estimated APY | data-bearing |
+| `ton_trading_get_pool_volume` | Detailed volume statistics for a specific pool | data-bearing |
+| `ton_trading_backtest` | Replay a strategy against trade journal history | data-bearing |
+| `ton_trading_calculate_risk_metrics` | VaR, max drawdown, Sharpe ratio, win/loss stats | data-bearing |
+| `ton_trading_set_stop_loss` | Register a stop-loss and optional take-profit rule | action |
+| `ton_trading_check_stop_loss` | Query active stop-loss rules and detect triggered ones | data-bearing |
+| `ton_trading_get_optimal_position_size` | Kelly Criterion and fixed-fraction position sizing | data-bearing |
+| `ton_trading_schedule_trade` | Store a pending trade for future execution | action |
+| `ton_trading_get_scheduled_trades` | List pending scheduled trades and flag due ones | data-bearing |
 
 ## Install
 
