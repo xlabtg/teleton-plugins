@@ -1582,14 +1582,16 @@ export const tools = (sdk) => [
       try {
         const since = Date.now() - lookback_days * 24 * 60 * 60 * 1000;
 
-        const modeClause = mode === "all" ? "" : `AND mode = '${mode}'`;
+        const [modeClause, modeParams] = mode === "all"
+          ? ["", []]
+          : ["AND mode = ?", [mode]];
         const trades = sdk.db
           .prepare(
             `SELECT pnl_percent FROM trade_journal
              WHERE status = 'closed' AND timestamp >= ? ${modeClause}
              ORDER BY timestamp ASC`
           )
-          .all(since);
+          .all(since, ...modeParams);
 
         if (trades.length === 0) {
           return {
@@ -2026,11 +2028,13 @@ export const tools = (sdk) => [
       const status = params.status ?? "pending";
       const limit = params.limit ?? 20;
       try {
-        const statusClause = status === "all" ? "" : `WHERE status = '${status}'`;
+        const [statusClause, statusParams] = status === "all"
+          ? ["", []]
+          : ["WHERE status = ?", [status]];
 
         const scheduled = sdk.db
           .prepare(`SELECT * FROM scheduled_trades ${statusClause} ORDER BY execute_at ASC LIMIT ?`)
-          .all(limit);
+          .all(...statusParams, limit);
 
         const now = Date.now();
         const annotated = scheduled.map((s) => ({

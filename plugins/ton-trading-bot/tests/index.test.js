@@ -1172,4 +1172,107 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(result.data.scheduled_trades[1].is_due === false);
     });
   });
+
+  // ── SQL injection tests ─────────────────────────────────────────────────────
+  describe("SQL injection prevention", () => {
+    it("ton_trading_calculate_risk_metrics: mode value is passed as parameter, not interpolated", async () => {
+      const capturedSqls = [];
+      const capturedParams = [];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => {
+            capturedSqls.push(sql);
+            return {
+              get: () => null,
+              all: (...params) => { capturedParams.push(params); return []; },
+              run: () => ({ lastInsertRowid: 1 }),
+            };
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      await tool.execute({ mode: "real", lookback_days: 7, confidence_level: 0.95 }, {});
+      const riskSql = capturedSqls.find((s) => s.includes("trade_journal"));
+      assert.ok(riskSql, "trade_journal query should be captured");
+      // SQL must not contain the literal mode value — it must use a placeholder
+      assert.ok(!riskSql.includes("'real'"), "mode value must not be string-interpolated into SQL");
+      assert.ok(riskSql.includes("?"), "SQL must use parameterized placeholder");
+      // The mode value must be passed as a bound parameter
+      const riskParams = capturedParams.find((p) => p.some((v) => v === "real"));
+      assert.ok(riskParams, "mode value 'real' must be passed as a bound parameter");
+    });
+
+    it("ton_trading_calculate_risk_metrics: SQL injection payload is not interpolated", async () => {
+      const capturedSqls = [];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => {
+            capturedSqls.push(sql);
+            return {
+              get: () => null,
+              all: () => [],
+              run: () => ({ lastInsertRowid: 1 }),
+            };
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const injectionPayload = "real' OR '1'='1";
+      await tool.execute({ mode: injectionPayload, lookback_days: 7, confidence_level: 0.95 }, {});
+      const riskSql = capturedSqls.find((s) => s.includes("trade_journal"));
+      assert.ok(riskSql, "trade_journal query should be captured");
+      assert.ok(!riskSql.includes(injectionPayload), "SQL injection payload must not appear in query string");
+    });
+
+    it("ton_trading_get_scheduled_trades: status value is passed as parameter, not interpolated", async () => {
+      const capturedSqls = [];
+      const capturedParams = [];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => {
+            capturedSqls.push(sql);
+            return {
+              get: () => null,
+              all: (...params) => { capturedParams.push(params); return []; },
+              run: () => ({ lastInsertRowid: 1 }),
+            };
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_scheduled_trades");
+      await tool.execute({ status: "pending", limit: 10 }, {});
+      const schedSql = capturedSqls.find((s) => s.includes("scheduled_trades"));
+      assert.ok(schedSql, "scheduled_trades query should be captured");
+      assert.ok(!schedSql.includes("'pending'"), "status value must not be string-interpolated into SQL");
+      assert.ok(schedSql.includes("?"), "SQL must use parameterized placeholder");
+      const schedParams = capturedParams.find((p) => p.some((v) => v === "pending"));
+      assert.ok(schedParams, "status value 'pending' must be passed as a bound parameter");
+    });
+
+    it("ton_trading_get_scheduled_trades: SQL injection payload is not interpolated", async () => {
+      const capturedSqls = [];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => {
+            capturedSqls.push(sql);
+            return {
+              get: () => null,
+              all: () => [],
+              run: () => ({ lastInsertRowid: 1 }),
+            };
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_scheduled_trades");
+      const injectionPayload = "pending' OR '1'='1";
+      await tool.execute({ status: injectionPayload, limit: 10 }, {});
+      const schedSql = capturedSqls.find((s) => s.includes("scheduled_trades"));
+      assert.ok(schedSql, "scheduled_trades query should be captured");
+      assert.ok(!schedSql.includes(injectionPayload), "SQL injection payload must not appear in query string");
+    });
+  });
 });
