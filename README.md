@@ -130,7 +130,13 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 | Plugin | Description | Tools | Author |
 |--------|-------------|:-----:|--------|
-| [github-dev-assistant](plugins/github-dev-assistant/) | Complete GitHub workflow — repos, files, branches, PRs, issues, Actions, security, discussions | 57 | xlabtg |
+| [github-dev-assistant](plugins/github-dev-assistant/) | Complete GitHub workflow — repos, files, branches, PRs, issues, Actions, security, discussions | 60 | xlabtg |
+
+### AI & Memory
+
+| Plugin | Description | Tools | Author |
+|--------|-------------|:-----:|--------|
+| [memory](plugins/memory/) | Persistent Memory Plugin — Store and retrieve memory entries with advanced filtering: tags, entities, date ranges, and free text — composable in any combination | 10 | xlabtg |
 
 ### Utilities & Games
 
