@@ -89,6 +89,6 @@
   ],
   "permissions": [],
   "tags": ["github", "development", "automation", "git", "ci-cd", "security", "gists", "discussions"],
-  "repository": "https://github.com/xlabtg/teleton-plugins",
+  "repository": "https://github.com/TONresistor/teleton-plugins",
   "funding": null
 }

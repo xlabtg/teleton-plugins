@@ -109,6 +109,6 @@
   },
   "permissions": [],
   "tags": ["trading", "ton", "dex", "portfolio", "simulation", "arbitrage", "sniper", "copy-trading", "farming", "backtesting", "risk-management"],
-  "repository": "https://github.com/xlabtg/teleton-plugins",
+  "repository": "https://github.com/TONresistor/teleton-plugins",
   "funding": null
 }
