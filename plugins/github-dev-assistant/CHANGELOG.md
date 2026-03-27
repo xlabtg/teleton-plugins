@@ -5,6 +5,18 @@ All notable changes to `github-dev-assistant` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-03-27
+
+### Security
+- **Fix path traversal vulnerability in `github_download_file`** (issue #57)
+  - Added `validateSavePath` to reject paths outside `/tmp` before any write
+  - Relative paths (e.g. `../../etc/passwd`) are now rejected with a clear error
+  - Absolute paths outside `/tmp` (e.g. `/etc/passwd`, `/home/user/.ssh/authorized_keys`) are rejected
+  - Path traversal through `/tmp/../etc` is resolved and rejected
+  - On rejection the tool returns `save_error` in the result data without writing any file
+- **Added `scope: "dm-only"` to `github_download_file`** — local filesystem writes are a destructive operation; the tool is now restricted to private DM chats
+- **Added `scope: "dm-only"` to `github_delete_file`** — permanently deleting files from a repository is a destructive operation; restricted to private DM chats
+
 ## [3.0.0] - 2026-03-24
 
 ### Added

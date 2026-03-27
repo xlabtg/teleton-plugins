@@ -14,8 +14,45 @@
  * All tools return { success, data?, error? } per the SDK ToolResult contract.
  */
 
+import { resolve, isAbsolute, normalize } from "node:path";
 import { createGitHubClient } from "./github-client.js";
 import { decodeBase64, validateRequired, formatError } from "./utils.js";
+
+/**
+ * Validate that a local file path is safe to write to.
+ *
+ * Rules:
+ *  1. Must be an absolute path (no relative paths like "../../etc/passwd").
+ *  2. After resolving, must not escape the allowed root directory.
+ *
+ * @param {string} filePath - The path supplied by the caller.
+ * @param {string} allowedRoot - The directory the resolved path must be under.
+ * @returns {{ valid: boolean, error?: string, resolved?: string }}
+ */
+function validateSavePath(filePath, allowedRoot) {
+  if (typeof filePath !== "string" || filePath.trim() === "") {
+    return { valid: false, error: "save_to_file must be a non-empty string." };
+  }
+
+  if (!isAbsolute(filePath)) {
+    return {
+      valid: false,
+      error: `save_to_file must be an absolute path (got: "${filePath}"). Relative paths are not allowed.`,
+    };
+  }
+
+  const resolvedFile = resolve(normalize(filePath));
+  const resolvedRoot = resolve(allowedRoot);
+
+  if (!resolvedFile.startsWith(resolvedRoot + "/") && resolvedFile !== resolvedRoot) {
+    return {
+      valid: false,
+      error: `save_to_file path "${filePath}" is outside the allowed directory "${allowedRoot}". Files may only be saved under that directory.`,
+    };
+  }
+
+  return { valid: true, resolved: resolvedFile };
+}
 
 /**
  * Build extended file operation tools.
@@ -35,6 +72,7 @@ export function buildFileOpsTools(sdk) {
         "Requires the file SHA (get it via github_get_file first). " +
         "Returns a confirmation with the commit URL.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {
@@ -387,8 +425,9 @@ export function buildFileOpsTools(sdk) {
       name: "github_download_file",
       description:
         "Use this when the user wants to download a file from a GitHub repository and get its content. " +
-        "Returns the file content as text. Optionally saves to a local path if save_to_file is provided.",
-      category: "data-bearing",
+        "Returns the file content as text. Optionally saves to a local path under /tmp if save_to_file is provided.",
+      category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {
@@ -410,7 +449,7 @@ export function buildFileOpsTools(sdk) {
           },
           save_to_file: {
             type: "string",
-            description: "Optional local file path to save the content to (e.g. '/tmp/index.js')",
+            description: "Optional absolute local file path under /tmp to save the content to (e.g. '/tmp/index.js'). Paths outside /tmp are rejected.",
           },
         },
         required: ["owner", "repo", "path"],
@@ -455,13 +494,19 @@ export function buildFileOpsTools(sdk) {
           };
 
           if (params.save_to_file && content !== null) {
-            try {
-              const { writeFile } = await import("node:fs/promises");
-              await writeFile(params.save_to_file, content, "utf8");
-              result.data.saved_to = params.save_to_file;
-              sdk.log.info(`github_download_file: saved to ${params.save_to_file}`);
-            } catch (writeErr) {
-              result.data.save_error = `Could not save to file: ${formatError(writeErr)}`;
+            const allowedRoot = "/tmp";
+            const pathCheck = validateSavePath(params.save_to_file, allowedRoot);
+            if (!pathCheck.valid) {
+              result.data.save_error = pathCheck.error;
+            } else {
+              try {
+                const { writeFile } = await import("node:fs/promises");
+                await writeFile(pathCheck.resolved, content, "utf8");
+                result.data.saved_to = pathCheck.resolved;
+                sdk.log.info(`github_download_file: saved to ${pathCheck.resolved}`);
+              } catch (writeErr) {
+                result.data.save_error = `Could not save to file: ${formatError(writeErr)}`;
+              }
             }
           }
 
