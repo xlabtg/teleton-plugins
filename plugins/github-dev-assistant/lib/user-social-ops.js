@@ -466,6 +466,7 @@ export function buildUserSocialOpsTools(sdk) {
         "Use this when the user wants to create a new GitHub gist with one or more files. " +
         "Returns the created gist's ID and URL.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

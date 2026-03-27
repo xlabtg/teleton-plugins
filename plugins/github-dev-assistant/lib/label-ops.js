@@ -192,6 +192,7 @@ export function buildLabelOpsTools(sdk) {
         "Use this when the user wants to delete a label from a GitHub repository. " +
         "Returns a confirmation on success.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

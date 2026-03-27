@@ -323,6 +323,7 @@ export function buildIssueTrackerTools(sdk) {
         "Use this when the user wants to close a GitHub issue (mark as done or won't fix). " +
         "Optionally posts a closing comment. Returns a confirmation.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

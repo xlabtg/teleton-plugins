@@ -271,6 +271,7 @@ export function buildExtendedRepoOpsTools(sdk) {
         "Use this when the user wants to commit multiple files to a GitHub repository in a single operation. " +
         "Creates or updates multiple files with one commit. Each file should have a path and content.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

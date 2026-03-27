@@ -254,6 +254,7 @@ export function buildPRManagerTools(sdk) {
         "Returns confirmation of the merge with the commit SHA. " +
         "When require_pr_review config is true, explicitly ask the user to confirm before calling this tool.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

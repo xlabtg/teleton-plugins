@@ -216,6 +216,7 @@ export function buildWorkflowOpsTools(sdk) {
         "Use this when the user wants to cancel a currently running GitHub Actions workflow run. " +
         "Returns a confirmation on success.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {

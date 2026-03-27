@@ -233,6 +233,7 @@ export function buildIssuePROpsTools(sdk) {
         "Use this when the user wants to reopen a closed GitHub issue. " +
         "Returns a confirmation with the issue URL.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {
@@ -310,6 +311,7 @@ export function buildIssuePROpsTools(sdk) {
         "Replaces all current assignees with the provided list (pass empty array to clear). " +
         "Returns a confirmation.",
       category: "action",
+      scope: "dm-only",
       parameters: {
         type: "object",
         properties: {
