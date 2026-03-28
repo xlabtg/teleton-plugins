@@ -184,6 +184,14 @@
       "author": "teleton",
       "tags": ["forum", "discussion", "ton", "decentralized", "x402", "boards"],
       "path": "plugins/boards"
+    },
+    {
+      "id": "github-dev-assistant",
+      "name": "GitHub Dev Assistant",
+      "description": "Full GitHub development workflow automation — repos, files, branches, PRs, issues, and GitHub Actions via Personal Access Token",
+      "author": "xlabtg",
+      "tags": ["github", "development", "automation", "git", "ci-cd"],
+      "path": "plugins/github-dev-assistant"
     }
   ]
 }
