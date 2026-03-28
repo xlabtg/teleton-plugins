@@ -66,7 +66,7 @@ import { formatError } from "./lib/utils.js";
 
 export const manifest = {
   name: "github-dev-assistant",
-  version: "3.1.0",
+  version: "3.1.2",
   sdkVersion: ">=1.0.0",
   description:
     "Complete GitHub development workflow automation — repos, files, branches, PRs, issues, commits, Actions workflows, labels, repo info, user profile, gists, notifications, starring, security alerts, and discussions via Personal Access Token",
