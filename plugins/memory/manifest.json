@@ -1,0 +1,30 @@
+{
+  "id": "memory",
+  "name": "Persistent Memory",
+  "version": "1.2.0",
+  "description": "Persistent memory with advanced filtering — store and retrieve entries by tags, entities, date range, or free text",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "tools": [
+    { "name": "memory_store",            "description": "Save a memory entry with optional tags and auto-detected entities" },
+    { "name": "memory_list",             "description": "List all memory entries (paginated), no filters required" },
+    { "name": "memory_search",           "description": "Search memory entries by tags, entity, date range, or free text" },
+    { "name": "memory_update",           "description": "Update content and/or tags of an existing memory entry by ID" },
+    { "name": "memory_delete",           "description": "Delete a memory entry by ID" },
+    { "name": "memory_list_tags",        "description": "List all tags and entities in use with counts" },
+    { "name": "memory_export",           "description": "Export all memory entries to JSON for backup or migration" },
+    { "name": "memory_import",           "description": "Import memory entries from a previously exported JSON blob" },
+    { "name": "memory_relate",           "description": "Create an explicit relationship between two memory entries (requires enableAssociativeMode)" },
+    { "name": "memory_find_connections", "description": "Find entries connected to a given entry via explicit relationships (requires enableAssociativeMode)" }
+  ],
+  "permissions": [],
+  "tags": ["memory", "storage", "search", "tags", "utility", "graph", "associations"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}
