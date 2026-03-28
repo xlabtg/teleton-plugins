@@ -1,0 +1,114 @@
+{
+  "id": "ton-trading-bot",
+  "name": "TON Trading Bot",
+  "version": "2.0.0",
+  "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation.",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "tools": [
+    {
+      "name": "ton_trading_get_market_data",
+      "description": "Fetch current TON price and DEX swap quotes for a token pair"
+    },
+    {
+      "name": "ton_trading_get_portfolio",
+      "description": "Get wallet balance, jetton holdings, and recent trade history"
+    },
+    {
+      "name": "ton_trading_validate_trade",
+      "description": "Check risk parameters before a trade (balance, max trade %, minimum balance)"
+    },
+    {
+      "name": "ton_trading_simulate_trade",
+      "description": "Paper-trade a swap using the virtual simulation balance (no real funds)"
+    },
+    {
+      "name": "ton_trading_execute_swap",
+      "description": "Execute a real DEX swap (STON.fi / DeDust) from the agent wallet — DM only"
+    },
+    {
+      "name": "ton_trading_record_trade",
+      "description": "Close an open trade in the journal and record final PnL"
+    },
+    {
+      "name": "ton_trading_get_arbitrage_opportunities",
+      "description": "Find cross-DEX price differences for a token pair across StonFi, DeDust, TONCO, and swap.coffee"
+    },
+    {
+      "name": "ton_trading_get_token_listings",
+      "description": "Fetch recently listed tokens on TON DEXes for sniper trading strategies"
+    },
+    {
+      "name": "ton_trading_get_token_info",
+      "description": "Get detailed information about a specific token: price, market cap, holders, volume"
+    },
+    {
+      "name": "ton_trading_validate_token",
+      "description": "Safety-check a token before sniping: liquidity, volume, and rug-pull risk signals"
+    },
+    {
+      "name": "ton_trading_get_top_traders",
+      "description": "Find top-performing trader wallets on TON ranked by win rate and volume"
+    },
+    {
+      "name": "ton_trading_get_trader_performance",
+      "description": "Analyse the on-chain trading performance of a specific wallet for copy trading"
+    },
+    {
+      "name": "ton_trading_get_active_pools",
+      "description": "List active liquidity pools on TON DEXes sorted by 24-h volume"
+    },
+    {
+      "name": "ton_trading_get_farms_with_apy",
+      "description": "List yield farming opportunities on TON DEXes with estimated APY"
+    },
+    {
+      "name": "ton_trading_get_pool_volume",
+      "description": "Get detailed volume statistics for a specific liquidity pool"
+    },
+    {
+      "name": "ton_trading_backtest",
+      "description": "Replay a strategy against trade journal history and return win rate, PnL, and Sharpe ratio"
+    },
+    {
+      "name": "ton_trading_calculate_risk_metrics",
+      "description": "Calculate VaR, max drawdown, Sharpe ratio, and win/loss statistics from trade history"
+    },
+    {
+      "name": "ton_trading_set_stop_loss",
+      "description": "Register a stop-loss and optional take-profit rule for an open trade"
+    },
+    {
+      "name": "ton_trading_check_stop_loss",
+      "description": "Query active stop-loss and take-profit rules and detect which ones are triggered by the current market price"
+    },
+    {
+      "name": "ton_trading_get_optimal_position_size",
+      "description": "Calculate optimal position size using Kelly Criterion and fixed-fraction methods"
+    },
+    {
+      "name": "ton_trading_schedule_trade",
+      "description": "Store a pending trade for future execution at a specified datetime"
+    },
+    {
+      "name": "ton_trading_get_scheduled_trades",
+      "description": "List pending scheduled trades and flag which ones are due for execution"
+    }
+  ],
+  "defaultConfig": {
+    "maxTradePercent": 10,
+    "minBalanceTON": 1,
+    "defaultSlippage": 0.05,
+    "simulationBalance": 1000
+  },
+  "permissions": [],
+  "tags": ["trading", "ton", "dex", "portfolio", "simulation", "arbitrage", "sniper", "copy-trading", "farming", "backtesting", "risk-management"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}

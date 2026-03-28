@@ -184,6 +184,14 @@
       "author": "teleton",
       "tags": ["forum", "discussion", "ton", "decentralized", "x402", "boards"],
       "path": "plugins/boards"
+    },
+    {
+      "id": "ton-trading-bot",
+      "name": "TON Trading Bot",
+      "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, and DEX swap execution",
+      "author": "xlabtg",
+      "tags": ["trading", "ton", "dex", "portfolio", "simulation"],
+      "path": "plugins/ton-trading-bot"
     }
   ]
 }
