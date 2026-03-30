@@ -703,6 +703,43 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.equal(result.data.entry_price_usd, 1);
     });
+
+    it("ton_trading_record_trade saves exit_price_usd to database", async () => {
+      const openTrade = {
+        id: 15,
+        mode: "simulation",
+        from_asset: "USDT",
+        to_asset: "TON",
+        amount_in: 50,
+        entry_price_usd: 1,
+        amount_out: null,
+        status: "open",
+      };
+      let savedExitPriceUsd = null;
+      const sdk = makeSdk({
+        dbRows: { trade: openTrade },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => openTrade,
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("UPDATE trade_journal")) {
+                savedExitPriceUsd = args[1];
+              }
+              return { lastInsertRowid: 15 };
+            },
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 15, amount_out: 37.6, exit_price_usd: 1.22 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(savedExitPriceUsd, 1.22, "exit_price_usd should be saved to database");
+    });
   });
 
   // ── ton_trading_get_arbitrage_opportunities ─────────────────────────────────
