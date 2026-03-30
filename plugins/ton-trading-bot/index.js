@@ -618,10 +618,10 @@ export const tools = (sdk) => [
         sdk.db
           .prepare(
             `UPDATE trade_journal
-             SET amount_out = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
+             SET amount_out = ?, exit_price_usd = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
              WHERE id = ?`
           )
-          .run(amount_out, pnl, pnlPercent, note ?? null, trade_id);
+          .run(amount_out, exit_price_usd ?? null, pnl, pnlPercent, note ?? null, trade_id);
 
         // If simulation, credit the proceeds back
         if (entry.mode === "simulation" && entry.to_asset === "TON") {

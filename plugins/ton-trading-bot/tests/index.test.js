@@ -693,6 +693,51 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.profit_or_loss, "profit");
     });
 
+    it("persists exit_price_usd to database when closing a trade", async () => {
+      const openTrade = {
+        id: 13,
+        mode: "real",
+        from_asset: "USDT",
+        to_asset: "TON",
+        amount_in: 50,
+        entry_price_usd: 1,
+        amount_out: null,
+        status: "open",
+      };
+      let capturedSql = null;
+      let capturedArgs = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("UPDATE trade_journal")) {
+                capturedSql = sql;
+                capturedArgs = args;
+              }
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 13, amount_out: 37.6, exit_price_usd: 1.33 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.ok(capturedSql?.includes("exit_price_usd"), "UPDATE SQL should include exit_price_usd column");
+      assert.ok(capturedArgs !== null, "run() should have been called");
+      // args order: amount_out, exit_price_usd, pnl, pnl_percent, note, trade_id
+      assert.equal(capturedArgs[1], 1.33, "exit_price_usd should be persisted as 1.33");
+    });
+
     it("ton_trading_simulate_trade accepts and stores entry_price_usd", async () => {
       const sdk = makeSdk({ dbRows: { simBalance: { balance: 1000 } } });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_simulate_trade");
