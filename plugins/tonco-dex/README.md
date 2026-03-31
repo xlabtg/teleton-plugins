@@ -23,6 +23,12 @@ mkdir -p ~/.teleton/plugins
 cp -r plugins/tonco-dex ~/.teleton/plugins/
 ```
 
+Most tools work immediately without any additional setup. To enable swap execution (`tonco_execute_swap`) and on-chain fee queries (`tonco_get_position_fees`), install the optional SDK:
+
+```bash
+cd ~/.teleton/plugins/tonco-dex && npm install
+```
+
 ## Usage
 
 Ask the AI:
@@ -58,10 +64,16 @@ Requires at runtime (provided by teleton):
 - `@ton/core` — Address parsing
 - `@ton/ton` — TonClient for on-chain queries
 
-Plugin-local dependencies (installed via `npm install` in the plugin folder):
-- `@toncodex/sdk` — TONCO SDK for swap transaction building and pool math
-- `@orbs-network/ton-access` — Decentralized TON HTTP API access
+Optional dependencies (enable full functionality when installed):
+- `@toncodex/sdk` — TONCO SDK for precise swap simulation, swap execution, and on-chain fee queries
+- `@orbs-network/ton-access` — Decentralized TON HTTP API access (falls back to toncenter.com)
 - `jsbi` — BigInt support for SDK internals
+
+To install optional dependencies:
+
+```bash
+cd ~/.teleton/plugins/tonco-dex && npm install
+```
 
 Agent wallet at `~/.teleton/wallet.json` is used for signing all on-chain transactions.
 

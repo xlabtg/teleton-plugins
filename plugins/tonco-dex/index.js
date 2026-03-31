@@ -587,10 +587,6 @@ const toncoSwapQuote = {
 
   execute: async (params) => {
     try {
-      if (!ToncoSDK) {
-        throw new Error("@toncodex/sdk not installed. Run npm install in the tonco-dex plugin folder.");
-      }
-
       const slippagePercent = params.slippage_percent ?? 1.0;
       const amountInStr = String(params.amount_in).trim();
 
@@ -598,10 +594,7 @@ const toncoSwapQuote = {
         throw new Error("amount_in must be a positive number");
       }
 
-      const {
-        Jetton, JettonAmount, Pool,
-        pTON_MINTER,
-      } = ToncoSDK;
+      const pTonAddr = ToncoSDK?.pTON_MINTER?.v1_5 ?? "EQBnGWMCf3-FZZq1W4IWcNiZ0_ms1pwhIr0WNCioB99MkA==";
 
       // Resolve pool containing the token pair from the indexer
       const tokenInAddr = params.token_in.trim();
@@ -610,7 +603,6 @@ const toncoSwapQuote = {
       const isTonOut = tokenOutAddr.toUpperCase() === "TON";
 
       // Resolve pTON address for TON
-      const pTonAddr = pTON_MINTER?.v1_5 ?? "EQBnGWMCf3-FZZq1W4IWcNiZ0_ms1pwhIr0WNCioB99MkA==";
       const resolvedInAddr = isTonIn ? pTonAddr : tokenInAddr;
       const resolvedOutAddr = isTonOut ? pTonAddr : tokenOutAddr;
 
@@ -656,45 +648,65 @@ const toncoSwapQuote = {
       }
 
       const poolData = sortedPools[0];
-
-      // Build Jetton objects
       const j0Data = poolData.jetton0;
       const j1Data = poolData.jetton1;
-      const jetton0 = new Jetton(j0Data.address, j0Data.decimals ?? 9, j0Data.symbol ?? "T0", j0Data.name);
-      const jetton1 = new Jetton(j1Data.address, j1Data.decimals ?? 9, j1Data.symbol ?? "T1", j1Data.name);
-
-      // Build Pool instance (off-chain simulation)
-      const pool = new Pool(
-        jetton0,
-        jetton1,
-        poolData.fee ?? 100,
-        poolData.priceSqrt.toString(),
-        poolData.liquidity.toString(),
-        poolData.tick ?? 0,
-        poolData.tickSpacing ?? 1,
-        [] // ticks array — simplified, use on-chain for precise routing
-      );
-
-      // Determine direction
       const zeroToOne = j0Data.address.toLowerCase() === resolvedInAddr.toLowerCase();
-      const tokenIn = zeroToOne ? jetton0 : jetton1;
-      const tokenOut = zeroToOne ? jetton1 : jetton0;
-      const decimalsIn = tokenIn.decimals;
-      const decimalsOut = tokenOut.decimals;
+      const tokenInMeta = zeroToOne ? j0Data : j1Data;
+      const tokenOutMeta = zeroToOne ? j1Data : j0Data;
+      const decimalsIn = tokenInMeta.decimals ?? 9;
+      const decimalsOut = tokenOutMeta.decimals ?? 9;
 
-      // Parse input amount
-      const rawIn = parseAmount(amountInStr, decimalsIn);
-      const amountIn = JettonAmount.fromRawAmount(tokenIn, rawIn.toString());
+      let rawOut;
+      let quotedWithSDK = false;
 
-      // Get output estimate
-      const [amountOut] = await pool.getOutputAmount(amountIn);
-      const rawOut = BigInt(amountOut.quotient.toString());
+      if (ToncoSDK) {
+        // Full AMM simulation via SDK (accounts for price impact and concentrated liquidity)
+        const { Jetton, JettonAmount, Pool } = ToncoSDK;
 
-      // Calculate price impact
+        const jetton0 = new Jetton(j0Data.address, j0Data.decimals ?? 9, j0Data.symbol ?? "T0", j0Data.name);
+        const jetton1 = new Jetton(j1Data.address, j1Data.decimals ?? 9, j1Data.symbol ?? "T1", j1Data.name);
+
+        // Build Pool instance (off-chain simulation)
+        const pool = new Pool(
+          jetton0,
+          jetton1,
+          poolData.fee ?? 100,
+          poolData.priceSqrt.toString(),
+          poolData.liquidity.toString(),
+          poolData.tick ?? 0,
+          poolData.tickSpacing ?? 1,
+          [] // ticks array — simplified, use on-chain for precise routing
+        );
+
+        const tokenIn = zeroToOne ? jetton0 : jetton1;
+        const rawIn = parseAmount(amountInStr, decimalsIn);
+        const amountIn = JettonAmount.fromRawAmount(tokenIn, rawIn.toString());
+        const [amountOut] = await pool.getOutputAmount(amountIn);
+        rawOut = BigInt(amountOut.quotient.toString());
+        quotedWithSDK = true;
+      } else {
+        // Price-based approximation using current pool price from indexer
+        // jetton0Price = price of jetton0 in terms of jetton1 (how many jetton1 per 1 jetton0)
+        // jetton1Price = price of jetton1 in terms of jetton0 (how many jetton0 per 1 jetton1)
+        const price = zeroToOne
+          ? parseFloat(poolData.jetton0Price ?? "0")
+          : parseFloat(poolData.jetton1Price ?? "0");
+        if (!price || price <= 0) {
+          return {
+            success: false,
+            error: "Pool price data unavailable. Try again or install @toncodex/sdk for precise quotes: cd ~/.teleton/plugins/tonco-dex && npm install",
+          };
+        }
+        const amountInFloat = parseFloat(amountInStr);
+        const rawOutFloat = amountInFloat * price * Math.pow(10, decimalsOut);
+        rawOut = BigInt(Math.floor(rawOutFloat));
+      }
+
+      // Calculate price impact (only meaningful for SDK quotes; price-based is spot price so impact is 0)
       const midPrice = zeroToOne ? parseFloat(poolData.jetton0Price ?? "0") : parseFloat(poolData.jetton1Price ?? "0");
       const expectedOutAtMidPrice = parseFloat(amountInStr) * midPrice;
       const actualOut = parseFloat(formatAmount(rawOut.toString(), decimalsOut));
-      const priceImpact = expectedOutAtMidPrice > 0
+      const priceImpact = quotedWithSDK && expectedOutAtMidPrice > 0
         ? ((expectedOutAtMidPrice - actualOut) / expectedOutAtMidPrice * 100).toFixed(3)
         : "0";
 
@@ -706,13 +718,13 @@ const toncoSwapQuote = {
         success: true,
         data: {
           token_in: {
-            symbol: tokenIn.symbol,
-            address: j0Data.address,
+            symbol: tokenInMeta.symbol,
+            address: tokenInMeta.address,
             amount: amountInStr,
           },
           token_out: {
-            symbol: tokenOut.symbol,
-            address: j1Data.address,
+            symbol: tokenOutMeta.symbol,
+            address: tokenOutMeta.address,
           },
           expected_output: formatAmount(rawOut.toString(), decimalsOut),
           minimum_output: formatAmount(minOut.toString(), decimalsOut),
@@ -724,7 +736,9 @@ const toncoSwapQuote = {
             fee_tier: poolData.fee ? `${(poolData.fee / 10000).toFixed(2)}%` : null,
             tvl_usd: formatUsd(poolData.totalValueLockedUsd),
           },
-          note: "Quote is based on current pool state. Execute within 30 seconds for best accuracy.",
+          note: quotedWithSDK
+            ? "Quote is based on current pool state. Execute within 30 seconds for best accuracy."
+            : "Quote is a spot price estimate (price impact not calculated). For a precise AMM quote, install @toncodex/sdk: cd ~/.teleton/plugins/tonco-dex && npm install",
         },
       };
     } catch (err) {
@@ -773,7 +787,10 @@ const toncoExecuteSwap = {
   execute: async (params, _context) => {
     try {
       if (!ToncoSDK) {
-        throw new Error("@toncodex/sdk not installed. Install it first.");
+        throw new Error(
+          "@toncodex/sdk is required for swap execution. " +
+          "Install it by running: cd ~/.teleton/plugins/tonco-dex && npm install"
+        );
       }
 
       const slippagePercent = params.slippage_percent ?? 1.0;
@@ -1143,7 +1160,10 @@ const toncoGetPositionFees = {
   execute: async (params) => {
     try {
       if (!ToncoSDK) {
-        throw new Error("@toncodex/sdk not installed.");
+        throw new Error(
+          "@toncodex/sdk is required for on-chain fee queries. " +
+          "Install it by running: cd ~/.teleton/plugins/tonco-dex && npm install"
+        );
       }
 
       const { PositionNFTV3Contract, PoolV3Contract } = ToncoSDK;
