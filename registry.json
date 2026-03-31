@@ -216,6 +216,14 @@
       "author": "xlabtg",
       "tags": ["memory", "storage", "search", "tags", "utility"],
       "path": "plugins/memory"
+    },
+    {
+      "id": "tonco-dex",
+      "name": "TONCO DEX",
+      "description": "Trade and manage concentrated liquidity positions on TONCO DEX — advanced AMM with multi-asset pools on TON",
+      "author": "xlabtg",
+      "tags": ["defi", "ton", "dex", "swap", "liquidity", "concentrated-liquidity", "amm"],
+      "path": "plugins/tonco-dex"
     }
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "id": "tonco-dex",
+  "name": "TONCO DEX",
+  "version": "1.0.0",
+  "description": "Trade and manage concentrated liquidity positions on TONCO DEX — advanced AMM with multi-asset pools on TON",
+  "author": { "name": "xlabtg", "url": "https://github.com/xlabtg" },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "tools": [
+    { "name": "tonco_list_pools", "description": "Discover and list TONCO liquidity pools, optionally filtered by token, sorted by TVL, volume, or APR" },
+    { "name": "tonco_get_pool_stats", "description": "Get detailed statistics for a specific TONCO pool including reserves, price, volume, fees, and APR" },
+    { "name": "tonco_get_token_info", "description": "Get token metadata and price information from TONCO indexer" },
+    { "name": "tonco_swap_quote", "description": "Get a swap quote from TONCO with expected output, price impact, and minimum received after slippage" },
+    { "name": "tonco_execute_swap", "description": "Execute a token swap on TONCO DEX — simulates first, then sends on-chain transaction" },
+    { "name": "tonco_get_positions", "description": "List liquidity positions on TONCO for a given owner address" },
+    { "name": "tonco_get_position_fees", "description": "Get uncollected fees for a specific TONCO liquidity position" }
+  ],
+  "permissions": [],
+  "secrets": {
+    "tonco_api_key": { "required": false, "description": "Optional API key for premium TONCO endpoints" }
+  },
+  "tags": ["defi", "ton", "dex", "swap", "liquidity", "concentrated-liquidity", "amm"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}
