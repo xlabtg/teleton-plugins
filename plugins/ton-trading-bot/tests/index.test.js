@@ -148,10 +148,10 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(Array.isArray(toolList));
     });
 
-    it("exports exactly 22 tools", () => {
+    it("exports exactly 24 tools", () => {
       const sdk = makeSdk();
       const toolList = mod.tools(sdk);
-      assert.equal(toolList.length, 22);
+      assert.equal(toolList.length, 24);
     });
 
     it("all tools have name, description, and execute", () => {
@@ -1426,6 +1426,267 @@ describe("ton-trading-bot plugin", () => {
       const schedSql = capturedSqls.find((s) => s.includes("scheduled_trades"));
       assert.ok(schedSql, "scheduled_trades query should be captured");
       assert.ok(!schedSql.includes(injectionPayload), "SQL injection payload must not appear in query string");
+    });
+  });
+
+  // ── ton_trading_record_trade: simulation balance bug fix ────────────────────
+  describe("ton_trading_record_trade simulation balance credit-back (issue #96)", () => {
+    it("credits principal + profit back when from_asset is TON and USD prices are provided", async () => {
+      // Reproduces issue #96: 13 TON → USDT trade, exit_price_usd=1, entry_price_usd=1.33 (TON price)
+      // pnl_usd = (amount_out * exit_price_usd) - (amount_in * entry_price_usd)
+      //         = (17.39 * 1) - (13 * 1.33) = 17.39 - 17.29 = 0.10 USD
+      // credit_ton = amount_in + pnl_usd / entry_price_usd = 13 + 0.10/1.33 ≈ 13.075
+      const openTrade = {
+        id: 100,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "EQUsdtAddress",
+        amount_in: 13,
+        entry_price_usd: 1.33,
+        amount_out: null,
+        status: "open",
+      };
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade, simBalance: { balance: 50 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 50 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 100, amount_out: 17.39, exit_price_usd: 1 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.ok(savedBalance !== null, "simulation balance should be updated on close");
+      // Expected: 50 (prev balance) + 13 (principal) + pnl_ton ≈ 50 + 13 + 0.075 ≈ 63.075
+      assert.ok(savedBalance > 63, `balance should be restored to ~63+, got ${savedBalance}`);
+      assert.ok(savedBalance < 64, `balance should be around 63, got ${savedBalance}`);
+    });
+
+    it("credits amount_out directly when no USD prices given (same-currency TON→TON trade)", async () => {
+      // TON→TON trade: deducted 10, received 11 → credit back 11
+      const openTrade = {
+        id: 101,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "TON",
+        amount_in: 10,
+        entry_price_usd: null,
+        amount_out: null,
+        status: "open",
+      };
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade, simBalance: { balance: 90 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 90 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute({ trade_id: 101, amount_out: 11 }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(savedBalance, 90 + 11, "should credit amount_out (11) back to balance (90+11=101)");
+    });
+
+    it("does NOT credit balance when from_asset is not TON (e.g. USDT→TON trade)", async () => {
+      // USDT→TON trade: no TON was deducted at open, so nothing to credit back
+      const openTrade = {
+        id: 102,
+        mode: "simulation",
+        from_asset: "EQUsdtAddress",
+        to_asset: "TON",
+        amount_in: 50,
+        entry_price_usd: 1,
+        amount_out: null,
+        status: "open",
+      };
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 100 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 102, amount_out: 37.6, exit_price_usd: 1.33 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(savedBalance, null, "should NOT update sim balance for non-TON from_asset trades");
+    });
+
+    it("credits back principal + loss when trade is a loss (TON→USDT losing trade)", async () => {
+      // 10 TON → USDT at $2/TON (entry), exit at $1.5/TON equivalent → loss
+      // amount_out = 15 USDT, exit_price_usd = 1 (USDT price)
+      // usdOut = 15, usdIn = 10 * 2 = 20, pnl = -5 USD
+      // credit_ton = 10 + (-5/2) = 10 - 2.5 = 7.5 TON
+      const openTrade = {
+        id: 103,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "EQUsdtAddress",
+        amount_in: 10,
+        entry_price_usd: 2,
+        amount_out: null,
+        status: "open",
+      };
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 90 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 103, amount_out: 15, exit_price_usd: 1 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.profit_or_loss, "loss");
+      // credit_ton = 7.5, new balance = 90 + 7.5 = 97.5
+      assert.ok(Math.abs(savedBalance - 97.5) < 0.0001, `expected 97.5, got ${savedBalance}`);
+    });
+  });
+
+  // ── ton_trading_reset_simulation_balance ────────────────────────────────────
+  describe("ton_trading_reset_simulation_balance", () => {
+    it("resets balance to specified amount and returns previous balance", async () => {
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { simBalance: { balance: 42 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => (sql.includes("sim_balance") ? { balance: 42 } : null),
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_reset_simulation_balance");
+      const result = await tool.execute({ amount: 1000 }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.previous_balance, 42);
+      assert.equal(result.data.new_balance, 1000);
+      assert.equal(savedBalance, 1000);
+    });
+
+    it("uses plugin config simulationBalance as default when no amount given", async () => {
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ pluginConfig: { simulationBalance: 500 }, dbRows: { simBalance: { balance: 10 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => (sql.includes("sim_balance") ? { balance: 10 } : null),
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        pluginConfig: { simulationBalance: 500 },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_reset_simulation_balance");
+      const result = await tool.execute({}, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(savedBalance, 500, "should default to simulationBalance config value");
+    });
+  });
+
+  // ── ton_trading_set_simulation_balance ──────────────────────────────────────
+  describe("ton_trading_set_simulation_balance", () => {
+    it("sets balance to specified amount and returns previous balance", async () => {
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { simBalance: { balance: 200 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => (sql.includes("sim_balance") ? { balance: 200 } : null),
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_set_simulation_balance");
+      const result = await tool.execute({ amount: 350 }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.previous_balance, 200);
+      assert.equal(result.data.new_balance, 350);
+      assert.equal(savedBalance, 350);
+    });
+
+    it("required parameters include amount", () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_set_simulation_balance");
+      assert.ok(tool.parameters?.required?.includes("amount"));
     });
   });
 });

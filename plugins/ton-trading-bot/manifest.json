@@ -99,6 +99,14 @@
     {
       "name": "ton_trading_get_scheduled_trades",
       "description": "List pending scheduled trades and flag which ones are due for execution"
+    },
+    {
+      "name": "ton_trading_reset_simulation_balance",
+      "description": "Reset the simulation balance to a starting amount for a fresh paper-trading session"
+    },
+    {
+      "name": "ton_trading_set_simulation_balance",
+      "description": "Manually set the simulation balance to a specific amount to align with real portfolio"
     }
   ],
   "defaultConfig": {

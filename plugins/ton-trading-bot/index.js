@@ -35,6 +35,10 @@
  *   - ton_trading_schedule_trade              — store a pending trade for future execution
  *   - ton_trading_get_scheduled_trades        — list pending scheduled trades
  *
+ * Simulation management tools:
+ *   - ton_trading_reset_simulation_balance    — reset virtual balance to starting amount
+ *   - ton_trading_set_simulation_balance      — manually set the virtual balance
+ *
  * Pattern B (SDK) — uses sdk.ton, sdk.ton.dex, sdk.db, sdk.storage, sdk.log
  *
  * Architecture: each tool is atomic. The LLM composes them into a strategy.
@@ -623,10 +627,19 @@ export const tools = (sdk) => [
           )
           .run(amount_out, exit_price_usd ?? null, pnl, pnlPercent, note ?? null, trade_id);
 
-        // If simulation, credit the proceeds back
-        if (entry.mode === "simulation" && entry.to_asset === "TON") {
+        // If simulation trade was opened with TON, credit back principal + profit/loss in TON.
+        // The balance was decremented by amount_in (TON) on open; on close we restore it.
+        // When USD prices are available the pnl is in USD — convert back to TON using
+        // the entry price (USD price of TON at trade open).  When no prices were provided
+        // (same-asset TON→TON trade) the raw amount_out is already in TON.
+        if (entry.mode === "simulation" && entry.from_asset === "TON") {
           const simBalance = getSimBalance(sdk);
-          setSimBalance(sdk, simBalance + amount_out);
+          const entryTonPriceUsd = entry.entry_price_usd ?? null;
+          const creditTon =
+            entryTonPriceUsd != null
+              ? entry.amount_in + pnl / entryTonPriceUsd
+              : amount_out; // same-currency (TON→TON): just return what came out
+          setSimBalance(sdk, simBalance + creditTon);
         }
 
         sdk.log.info(
@@ -2095,6 +2108,79 @@ export const tools = (sdk) => [
         };
       } catch (err) {
         sdk.log.error(`ton_trading_get_scheduled_trades failed: ${err.message}`);
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Tool 23: ton_trading_reset_simulation_balance ──────────────────────────
+  {
+    name: "ton_trading_reset_simulation_balance",
+    description:
+      "Reset the simulation (paper-trading) balance to a specified starting amount. Use this to start a fresh simulation session or undo accumulated errors in the virtual balance.",
+    category: "action",
+    parameters: {
+      type: "object",
+      properties: {
+        amount: {
+          type: "number",
+          description: "New starting balance in TON (default: plugin config simulationBalance, typically 1000)",
+          minimum: 0,
+        },
+      },
+    },
+    execute: async (params, _context) => {
+      try {
+        const amount = params.amount ?? sdk.pluginConfig.simulationBalance ?? 1000;
+        const previousBalance = getSimBalance(sdk);
+        setSimBalance(sdk, amount);
+        sdk.log.info(`Simulation balance reset from ${previousBalance} to ${amount} TON`);
+        return {
+          success: true,
+          data: {
+            previous_balance: previousBalance,
+            new_balance: amount,
+          },
+        };
+      } catch (err) {
+        sdk.log.error(`ton_trading_reset_simulation_balance failed: ${err.message}`);
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Tool 24: ton_trading_set_simulation_balance ────────────────────────────
+  {
+    name: "ton_trading_set_simulation_balance",
+    description:
+      "Manually set the simulation (paper-trading) balance to a specific amount. Use this to align the virtual balance with a real portfolio value or to inject/withdraw virtual funds.",
+    category: "action",
+    parameters: {
+      type: "object",
+      properties: {
+        amount: {
+          type: "number",
+          description: "New simulation balance in TON",
+          minimum: 0,
+        },
+      },
+      required: ["amount"],
+    },
+    execute: async (params, _context) => {
+      const { amount } = params;
+      try {
+        const previousBalance = getSimBalance(sdk);
+        setSimBalance(sdk, amount);
+        sdk.log.info(`Simulation balance manually set from ${previousBalance} to ${amount} TON`);
+        return {
+          success: true,
+          data: {
+            previous_balance: previousBalance,
+            new_balance: amount,
+          },
+        };
+      } catch (err) {
+        sdk.log.error(`ton_trading_set_simulation_balance failed: ${err.message}`);
         return { success: false, error: String(err.message).slice(0, 500) };
       }
     },
