@@ -1,0 +1,36 @@
+{
+  "id": "composio-direct",
+  "name": "Composio Direct",
+  "version": "1.0.0",
+  "description": "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "secrets": {
+    "composio_api_key": {
+      "required": true,
+      "env": "COMPOSIO_API_KEY",
+      "description": "Composio API key (create at https://app.composio.dev/settings)"
+    }
+  },
+  "defaultConfig": {
+    "base_url": "https://api.composio.dev/api/v1",
+    "timeout_ms": 30000,
+    "max_parallel_executions": 10
+  },
+  "tools": [
+    { "name": "composio_search_tools", "description": "Search for available Composio tools by query, toolkit name, or description" },
+    { "name": "composio_execute_tool", "description": "Execute a single Composio tool by its slug with given parameters" },
+    { "name": "composio_multi_execute", "description": "Execute multiple Composio tools in parallel or sequentially" },
+    { "name": "composio_auth_link", "description": "Get an OAuth authorization link for a Composio-connected service (GitHub, Gmail, Slack, etc.)" }
+  ],
+  "permissions": [],
+  "tags": ["automation", "composio", "integrations", "api", "oauth", "productivity"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}

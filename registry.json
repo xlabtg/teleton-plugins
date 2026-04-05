@@ -2,6 +2,14 @@
   "version": "1.0.0",
   "plugins": [
     {
+      "id": "composio-direct",
+      "name": "Composio Direct",
+      "description": "Direct access to 1000+ Composio automation tools -- search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
+      "author": "xlabtg",
+      "tags": ["automation", "composio", "integrations", "api", "oauth", "productivity"],
+      "path": "plugins/composio-direct"
+    },
+    {
       "id": "giftstat",
       "name": "Giftstat Market Data",
       "description": "Telegram gift market data -- collections, floor prices, models, stats, history",
