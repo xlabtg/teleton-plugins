@@ -64,6 +64,8 @@ function makeSdk(overrides = {}) {
           recommended: "stonfi",
           savings: "0.2",
         }),
+        quoteSTONfi: async () => ({ output: "10.5", price: "10.5" }),
+        quoteDeDust: async () => ({ output: "10.3", price: "10.3" }),
         swap: async (params) => ({
           expectedOutput: "10.5",
           minOutput: "9.975",
@@ -760,12 +762,8 @@ describe("ton-trading-bot plugin", () => {
           getPrice: async () => ({ usd: 3.5, source: "mock" }),
           getJettonBalances: async () => [],
           dex: {
-            quote: async () => ({
-              stonfi: { output: "10.0", price: "10.0" },
-              dedust: { output: "10.5", price: "10.5" },
-              recommended: "dedust",
-              savings: "0.5",
-            }),
+            quoteSTONfi: async () => ({ output: "10.0", price: "10.0" }),
+            quoteDeDust: async () => ({ output: "10.5", price: "10.5" }),
           },
         },
       });
@@ -783,11 +781,8 @@ describe("ton-trading-bot plugin", () => {
           getPrice: async () => ({ usd: 3.5, source: "mock" }),
           getJettonBalances: async () => [],
           dex: {
-            quote: async () => ({
-              stonfi: { output: "10.0", price: "10.0" },
-              dedust: { output: "10.0", price: "10.0" },
-              recommended: "stonfi",
-            }),
+            quoteSTONfi: async () => ({ output: "10.0", price: "10.0" }),
+            quoteDeDust: async () => ({ output: "10.0", price: "10.0" }),
           },
         },
       });
@@ -807,12 +802,59 @@ describe("ton-trading-bot plugin", () => {
           getBalance: async () => null,
           getPrice: async () => null,
           getJettonBalances: async () => [],
-          dex: { quote: async () => { throw new Error("DEX down"); } },
+          dex: {
+            quote: async () => { throw new Error("DEX down"); },
+            quoteSTONfi: async () => { throw new Error("StonFi down"); },
+            quoteDeDust: async () => { throw new Error("DeDust down"); },
+          },
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_arbitrage_opportunities");
       const result = await tool.execute({ from_asset: "TON", to_asset: "EQCxE6test", amount: "1" }, {});
       assert.equal(result.success, false);
+    });
+
+    it("error message includes the actual DEX error, not just a generic message", async () => {
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => null,
+          getPrice: async () => null,
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => { throw new Error("Router contract not found"); },
+            quoteSTONfi: async () => { throw new Error("Router contract not found"); },
+            quoteDeDust: async () => { throw new Error("Vault not initialized"); },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_arbitrage_opportunities");
+      const result = await tool.execute({ from_asset: "TON", to_asset: "EQCxE6test", amount: "1" }, {});
+      assert.equal(result.success, false);
+      // The error must contain actionable detail — not just the generic "Could not fetch DEX quotes"
+      assert.notEqual(result.error, "Could not fetch DEX quotes", "error should include actual failure detail, not just the generic message");
+      assert.ok(result.error, "error should be set");
+    });
+
+    it("succeeds with partial quotes when only one DEX fails", async () => {
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 3.5, source: "mock" }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => { throw new Error("aggregated quote unavailable"); },
+            quoteSTONfi: async () => ({ output: "10.0", price: "10.0" }),
+            quoteDeDust: async () => { throw new Error("DeDust pool not found"); },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_arbitrage_opportunities");
+      const result = await tool.execute({ from_asset: "TON", to_asset: "EQCxE6test", amount: "1" }, {});
+      // Only 1 DEX responded — not enough for arbitrage but should not hard-fail
+      assert.equal(result.success, true);
+      assert.ok(Array.isArray(result.data.opportunities));
     });
 
     it("required parameters include from_asset, to_asset, amount", () => {

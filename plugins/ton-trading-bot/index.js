@@ -700,25 +700,39 @@ export const tools = (sdk) => [
     execute: async (params, _context) => {
       const { from_asset, to_asset, amount, min_profit_percent = 0.5 } = params;
       try {
-        const dexFees = { stonfi: 0.003, dedust: 0.003, tonco: 0.003, swapcoffee: 0.002 };
+        const dexFees = { stonfi: 0.003, dedust: 0.003 };
+        const quoteParams = { fromAsset: from_asset, toAsset: to_asset, amount: parseFloat(amount) };
 
-        const quote = await sdk.ton.dex.quote({
-          fromAsset: from_asset,
-          toAsset: to_asset,
-          amount: parseFloat(amount),
-        }).catch((err) => {
-          sdk.log.warn(`DEX quote failed: ${err.message}`);
-          return null;
-        });
+        // Query each DEX individually so a single failure doesn't hide the others
+        const dexErrors = {};
+        const [stonfiResult, dedustResult] = await Promise.all([
+          sdk.ton.dex.quoteSTONfi(quoteParams).catch((err) => {
+            sdk.log.warn(`StonFi quote failed for ${from_asset}→${to_asset}: ${err.message}`);
+            dexErrors.stonfi = err.message;
+            return null;
+          }),
+          sdk.ton.dex.quoteDeDust(quoteParams).catch((err) => {
+            sdk.log.warn(`DeDust quote failed for ${from_asset}→${to_asset}: ${err.message}`);
+            dexErrors.dedust = err.message;
+            return null;
+          }),
+        ]);
 
-        if (!quote) {
-          return { success: false, error: "Could not fetch DEX quotes" };
+        const rawQuotes = { stonfi: stonfiResult, dedust: dedustResult };
+        const anySucceeded = Object.values(rawQuotes).some((q) => q !== null);
+
+        if (!anySucceeded) {
+          const errorDetail = Object.entries(dexErrors)
+            .map(([dex, msg]) => `${dex}: ${msg}`)
+            .join("; ");
+          sdk.log.error(`All DEX quotes failed for ${from_asset}→${to_asset}: ${errorDetail}`);
+          return { success: false, error: `Could not fetch DEX quotes — ${errorDetail}`.slice(0, 500) };
         }
 
         // Collect per-DEX outputs
         const dexOutputs = [];
         for (const [dex, fee] of Object.entries(dexFees)) {
-          const raw = quote[dex];
+          const raw = rawQuotes[dex];
           if (!raw) continue;
           const outputRaw = parseFloat(raw.output ?? raw.price ?? 0);
           if (outputRaw <= 0) continue;
