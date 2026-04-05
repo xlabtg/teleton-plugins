@@ -18,8 +18,16 @@ import assert from "node:assert/strict";
  * @returns {object}
  */
 function makeSdk({ apiKey = "test-api-key", config = {} } = {}) {
+  const secretsStore = apiKey ? { composio_api_key: apiKey } : {};
   return {
-    secrets: { composio_api_key: apiKey },
+    secrets: {
+      get: (key) => secretsStore[key] ?? undefined,
+      has: (key) => key in secretsStore,
+      require: (key) => {
+        if (!(key in secretsStore)) throw new Error(`SECRET_NOT_FOUND: ${key}`);
+        return secretsStore[key];
+      },
+    },
     config: {
       base_url: "https://api.composio.dev/api/v1",
       timeout_ms: 5000,
@@ -163,7 +171,6 @@ describe("composio_search_tools", () => {
 
   it("returns error when API key is missing", async () => {
     const sdk = makeSdk({ apiKey: null });
-    sdk.secrets = {};
     const [searchTool] = toolsFactory(sdk);
     const result = await searchTool.execute({}, makeContext());
 
@@ -280,8 +287,7 @@ describe("composio_execute_tool", () => {
   });
 
   it("returns error when API key is missing", async () => {
-    const sdk = makeSdk();
-    sdk.secrets = {};
+    const sdk = makeSdk({ apiKey: null });
     const toolList = toolsFactory(sdk);
     const executeTool = toolList.find((t) => t.name === "composio_execute_tool");
     const result = await executeTool.execute(
@@ -406,8 +412,7 @@ describe("composio_multi_execute", () => {
   });
 
   it("returns error when API key is missing", async () => {
-    const sdk = makeSdk();
-    sdk.secrets = {};
+    const sdk = makeSdk({ apiKey: null });
     const toolList = toolsFactory(sdk);
     const multiTool = toolList.find((t) => t.name === "composio_multi_execute");
     const result = await multiTool.execute(
@@ -477,8 +482,7 @@ describe("composio_auth_link", () => {
   });
 
   it("returns error when API key is missing", async () => {
-    const sdk = makeSdk();
-    sdk.secrets = {};
+    const sdk = makeSdk({ apiKey: null });
     const toolList = toolsFactory(sdk);
     const authTool = toolList.find((t) => t.name === "composio_auth_link");
     const result = await authTool.execute({ service: "github" }, makeContext());

@@ -203,7 +203,7 @@ export const tools = (sdk) => {
    * @returns {string | null}
    */
   function getApiKey() {
-    return sdk.secrets?.composio_api_key ?? null;
+    return sdk.secrets?.get("composio_api_key") ?? null;
   }
 
   /**
