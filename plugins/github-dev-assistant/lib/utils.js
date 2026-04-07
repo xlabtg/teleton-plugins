@@ -119,7 +119,11 @@ export function formatError(err, fallback = "An unexpected error occurred") {
     .replace(/ghp_[A-Za-z0-9]+/g, "[REDACTED]")
     .replace(/ghs_[A-Za-z0-9]+/g, "[REDACTED]")
     .replace(/ghu_[A-Za-z0-9]+/g, "[REDACTED]")
+    .replace(/gho_[A-Za-z0-9]+/g, "[REDACTED]")
+    .replace(/github_pat_[A-Za-z0-9_]+/g, "[REDACTED]")
     .replace(/Bearer [A-Za-z0-9\-._~+/]+=*/g, "Bearer [REDACTED]")
+    .replace(/-----BEGIN[^-]*PRIVATE KEY-----/g, "[REDACTED PRIVATE KEY]")
+    .replace(/(api_?key|secret|password)\s*[:=]\s*\S+/gi, "$1: [REDACTED]")
     .slice(0, 500);
 }
 
