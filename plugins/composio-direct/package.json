@@ -1,9 +1,0 @@
-{
-  "name": "composio-direct",
-  "version": "1.0.0",
-  "description": "Direct integration with 1000+ Composio automation tools",
-  "type": "module",
-  "dependencies": {
-    "@composio/core": "^0.6.8"
-  }
-}

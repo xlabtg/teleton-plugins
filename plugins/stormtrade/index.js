@@ -21,14 +21,27 @@ const _pluginRequire = createRequire(import.meta.url);                // local: 
 const { Address, SendMode } = _require("@ton/core");
 const { WalletContractV5R1, TonClient, toNano, internal } = _require("@ton/ton");
 const { mnemonicToPrivateKey } = _require("@ton/crypto");
-const {
-  StormSDK,
-  Direction,
-  numToNano,
-  numFromNano,
-  toStablecoin,
-  fromStablecoin,
-} = _pluginRequire("@storm-trade/sdk");
+
+// @storm-trade/sdk — loaded from plugin's local node_modules (optional).
+// All read tools use the REST API and work without the SDK.
+// Write tools (open/close positions, stake, etc.) require the SDK.
+let StormSDK = null;
+let Direction = null;
+let numToNano = null;
+let numFromNano = null;
+let toStablecoin = null;
+let fromStablecoin = null;
+try {
+  const stormSdk = _pluginRequire("@storm-trade/sdk");
+  StormSDK = stormSdk.StormSDK;
+  Direction = stormSdk.Direction;
+  numToNano = stormSdk.numToNano;
+  numFromNano = stormSdk.numFromNano;
+  toStablecoin = stormSdk.toStablecoin;
+  fromStablecoin = stormSdk.fromStablecoin;
+} catch {
+  // SDK not available; write tools will return an actionable install error
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -97,8 +110,14 @@ function getAgentAddress() {
   return data.address;
 }
 
-/** Return StormSDK instance for the given vault type. */
+/** Return StormSDK instance for the given vault type.
+ *  Throws a descriptive error if the SDK is not installed. */
 function getSDK(vault, client) {
+  if (!StormSDK) {
+    throw new Error(
+      "@storm-trade/sdk is not installed. Run: cd ~/.teleton/plugins/stormtrade && npm install"
+    );
+  }
   switch ((vault || "usdt").toLowerCase()) {
     case "usdt":
       return StormSDK.asMainnetUSDT(client);
@@ -135,8 +154,14 @@ function parseBaseAsset(market) {
   return market.split("/")[0].toUpperCase();
 }
 
-/** Parse direction string to SDK Direction enum. */
+/** Parse direction string to SDK Direction enum.
+ *  Requires @storm-trade/sdk to be installed. */
 function parseDirection(dir) {
+  if (!Direction) {
+    throw new Error(
+      "@storm-trade/sdk is not installed. Run: cd ~/.teleton/plugins/stormtrade && npm install"
+    );
+  }
   const d = (dir || "").toLowerCase();
   if (d === "long" || d === "0") return Direction.long;
   if (d === "short" || d === "1") return Direction.short;
