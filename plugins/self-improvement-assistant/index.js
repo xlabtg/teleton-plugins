@@ -86,6 +86,12 @@ export function migrate(db) {
 }
 
 // ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
+
+let _selfImproveTimer = null;
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -486,11 +492,11 @@ export const tools = (sdk) => [
           sdk.storage.set("scheduled_enabled", true);
 
           // Clear existing timer if any
-          if (global.__selfImproveTimer) {
-            clearInterval(global.__selfImproveTimer);
+          if (_selfImproveTimer) {
+            clearInterval(_selfImproveTimer);
           }
 
-          global.__selfImproveTimer = setInterval(async () => {
+          _selfImproveTimer = setInterval(async () => {
             sdk.log.info(`self_schedule_analysis: running scheduled analysis for ${params.repo}`);
             try {
               const token = sdk.secrets.get("github_token");
@@ -569,9 +575,9 @@ export const tools = (sdk) => [
           };
         } else {
           // Disable
-          if (global.__selfImproveTimer) {
-            clearInterval(global.__selfImproveTimer);
-            delete global.__selfImproveTimer;
+          if (_selfImproveTimer) {
+            clearInterval(_selfImproveTimer);
+            _selfImproveTimer = null;
           }
           sdk.storage.set("scheduled_enabled", false);
           sdk.log.info("self_schedule_analysis: disabled");
@@ -673,9 +679,9 @@ export async function start(ctx) {
 }
 
 export async function stop() {
-  if (global.__selfImproveTimer) {
-    clearInterval(global.__selfImproveTimer);
-    delete global.__selfImproveTimer;
+  if (_selfImproveTimer) {
+    clearInterval(_selfImproveTimer);
+    _selfImproveTimer = null;
   }
 }
 
