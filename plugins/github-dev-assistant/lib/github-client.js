@@ -222,20 +222,9 @@ export function createGitHubClient(sdk) {
     async graphql(query, variables = {}) {
       await rateLimiter.wait();
 
-      const token = getAccessToken();
-      const headers = {
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-        "User-Agent": "teleton-github-dev-assistant/1.0.0",
-      };
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
       const res = await fetch("https://api.github.com/graphql", {
         method: "POST",
-        headers,
+        headers: buildHeaders(),
         body: JSON.stringify({ query, variables }),
         signal: AbortSignal.timeout(20000),
       });
