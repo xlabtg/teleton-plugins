@@ -1,0 +1,37 @@
+{
+  "id": "self-improvement-assistant",
+  "name": "Self Improvement Assistant",
+  "version": "1.0.0",
+  "description": "Autonomous codebase analysis and GitHub issue creation — analyze repositories for bugs, security issues, and improvement opportunities, then create structured GitHub issues from findings",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "secrets": {
+    "github_token": {
+      "required": true,
+      "env": "SELF_IMPROVEMENT_ASSISTANT_GITHUB_TOKEN",
+      "description": "GitHub Personal Access Token with repo scope (create at https://github.com/settings/tokens)"
+    }
+  },
+  "defaultConfig": {
+    "analysis_interval_hours": 24,
+    "auto_create_issues": false,
+    "max_files_per_analysis": 50,
+    "exclude_paths": ["node_modules/", "dist/", ".test.", ".spec."]
+  },
+  "tools": [
+    { "name": "self_analyze_codebase", "description": "Analyze a GitHub repository's JS/TS source files for bugs, security issues, and improvement opportunities" },
+    { "name": "self_create_issue", "description": "Create a structured GitHub issue from a code analysis finding" },
+    { "name": "self_schedule_analysis", "description": "Enable or disable periodic autonomous codebase analysis" },
+    { "name": "self_list_analysis_history", "description": "List past analysis runs with timestamps, repositories, and findings counts" }
+  ],
+  "permissions": [],
+  "tags": ["github", "code-quality", "automation", "analysis", "self-improvement", "ai"],
+  "repository": "https://github.com/xlabtg/teleton-plugins",
+  "funding": null
+}

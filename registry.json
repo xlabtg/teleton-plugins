@@ -232,6 +232,14 @@
       "author": "xlabtg",
       "tags": ["defi", "ton", "dex", "swap", "liquidity", "concentrated-liquidity", "amm"],
       "path": "plugins/tonco-dex"
+    },
+    {
+      "id": "self-improvement-assistant",
+      "name": "Self Improvement Assistant",
+      "description": "Autonomous codebase analysis and GitHub issue creation — analyze repositories for bugs, security issues, and improvement opportunities, then create structured GitHub issues from findings",
+      "author": "xlabtg",
+      "tags": ["github", "code-quality", "automation", "analysis", "self-improvement", "ai"],
+      "path": "plugins/self-improvement-assistant"
     }
   ]
 }
