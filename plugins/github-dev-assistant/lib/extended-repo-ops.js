@@ -315,6 +315,14 @@ export function buildExtendedRepoOpsTools(sdk) {
             return { success: false, error: "files must be a non-empty array" };
           }
 
+          const MAX_FILES_PER_PUSH = 10;
+          if (params.files.length > MAX_FILES_PER_PUSH) {
+            return {
+              success: false,
+              error: `Maximum ${MAX_FILES_PER_PUSH} files per push. Got ${params.files.length}. Split into multiple calls.`,
+            };
+          }
+
           const client = createGitHubClient(sdk);
           const owner = encodeURIComponent(params.owner);
           const repoName = encodeURIComponent(params.repo);
@@ -334,31 +342,37 @@ export function buildExtendedRepoOpsTools(sdk) {
             return { success: false, error: "Could not retrieve base tree SHA." };
           }
 
-          // Step 2: Create blobs for each file
-          const treeEntries = [];
+          // Step 2: Validate all files before making any API calls
           for (const file of params.files) {
             if (!file.path || file.content === undefined) {
               return { success: false, error: `Each file must have 'path' and 'content'. Invalid entry: ${JSON.stringify(file)}` };
             }
-            const blob = await client.post(`/repos/${owner}/${repoName}/git/blobs`, {
-              content: file.content,
-              encoding: "utf-8",
-            });
-            treeEntries.push({
-              path: file.path,
-              mode: "100644",
-              type: "blob",
-              sha: blob.sha,
-            });
           }
 
-          // Step 3: Create a new tree
+          // Step 3: Create blobs for all files concurrently to avoid sequential rate limiting
+          const blobResults = await Promise.all(
+            params.files.map((file) =>
+              client.post(`/repos/${owner}/${repoName}/git/blobs`, {
+                content: file.content,
+                encoding: "utf-8",
+              })
+            )
+          );
+
+          const treeEntries = params.files.map((file, i) => ({
+            path: file.path,
+            mode: "100644",
+            type: "blob",
+            sha: blobResults[i].sha,
+          }));
+
+          // Step 4: Create a new tree
           const newTree = await client.post(`/repos/${owner}/${repoName}/git/trees`, {
             base_tree: baseTreeSha,
             tree: treeEntries,
           });
 
-          // Step 4: Create the commit
+          // Step 5: Create the commit
           const authorName = sdk.pluginConfig?.commit_author_name ?? "Teleton AI Agent";
           const authorEmail = sdk.pluginConfig?.commit_author_email ?? "agent@teleton.local";
 
@@ -369,7 +383,7 @@ export function buildExtendedRepoOpsTools(sdk) {
             author: { name: authorName, email: authorEmail },
           });
 
-          // Step 5: Update the branch reference
+          // Step 6: Update the branch reference
           await client.patch(
             `/repos/${owner}/${repoName}/git/refs/heads/${encodeURIComponent(params.branch)}`,
             { sha: newCommit.sha, force: false }
