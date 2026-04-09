@@ -622,59 +622,55 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(tool.parameters?.required?.includes("amount_out"));
     });
 
-    it("calculates P&L in USD when currencies differ (USDT→TON trade)", async () => {
-      // Reproduces issue #80: 50 USDT → 37.6 TON at entry_price_usd=1 (USDT),
-      // exit_price_usd=1.33 (TON price in USD). Real P&L should be ~$0, not -$12.40.
+    it("calculates P&L in USD when currencies differ (USDT→TON trade, USDT price stable)", async () => {
+      // USDT→TON trade: 50 USDT at entry_price_usd=1 (USDT price), exit_price_usd=1 (USDT still $1).
+      // Both entry_price_usd and exit_price_usd refer to the from_asset (USDT) price.
+      // P&L ≈ 0 since USDT is stable and has not changed price.
       const openTrade = {
         id: 10,
         mode: "simulation",
         from_asset: "USDT",
         to_asset: "TON",
         amount_in: 50,       // 50 USDT spent
-        entry_price_usd: 1,  // 1 USDT = $1
+        entry_price_usd: 1,  // 1 USDT = $1 at entry
         amount_out: null,
         status: "open",
       };
       const sdk = makeSdk({ dbRows: { trade: openTrade } });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
-      // Closing: received 37.6 TON at $1.33/TON = $50.008 USD value
+      // Closing: received 37.6 TON; USDT exit_price_usd = $1 (stablecoin, unchanged)
       const result = await tool.execute(
-        { trade_id: 10, amount_out: 37.6, exit_price_usd: 1.33 },
+        { trade_id: 10, amount_out: 37.6, exit_price_usd: 1 },
         makeContext()
       );
       assert.equal(result.success, true);
-      // USD value out = 37.6 * 1.33 = 50.008; USD value in = 50 * 1 = 50
-      // pnl = 50.008 - 50 = 0.008 (small positive, not -12.40)
-      assert.ok(result.data.pnl > 0, `pnl should be slightly positive (~0.008), got ${result.data.pnl}`);
-      assert.ok(result.data.pnl < 1, `pnl should be near zero, got ${result.data.pnl}`);
-      assert.equal(result.data.profit_or_loss, "profit");
+      // usdIn = 50 * 1 = 50; usdOut = 50 * 1 = 50; pnl = 0
+      assert.equal(result.data.pnl, 0, `pnl should be 0 for stable-to-stable round trip, got ${result.data.pnl}`);
     });
 
-    it("calculates P&L correctly for TON→USDT trade using USD prices", async () => {
-      // Buying USDT with TON: 37.6 TON at $1.33 → 50 USDT
+    it("calculates P&L correctly for TON→USDT trade using USD prices (issue #80 fix)", async () => {
+      // Selling TON for USDT: 37.6 TON at $1.33 entry, closed at $1.33 exit (break-even).
+      // Both entry_price_usd and exit_price_usd refer to the from_asset (TON) price.
       const openTrade = {
         id: 11,
         mode: "simulation",
         from_asset: "TON",
         to_asset: "USDT",
-        amount_in: 37.6,     // 37.6 TON spent
-        entry_price_usd: 1.33, // TON = $1.33
+        amount_in: 37.6,     // 37.6 TON sold
+        entry_price_usd: 1.33, // TON = $1.33 at entry
         amount_out: null,
         status: "open",
       };
       const sdk = makeSdk({ dbRows: { trade: openTrade } });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
-      // Closing: received 50 USDT at $1/USDT
+      // Closing: received 50.008 USDT; TON exit price is still $1.33 (no price movement)
       const result = await tool.execute(
-        { trade_id: 11, amount_out: 50, exit_price_usd: 1 },
+        { trade_id: 11, amount_out: 50.008, exit_price_usd: 1.33 },
         makeContext()
       );
       assert.equal(result.success, true);
-      // USD value out = 50 * 1 = 50; USD value in = 37.6 * 1.33 = 50.008
-      // pnl = 50 - 50.008 = -0.008 (tiny loss, not a huge number)
-      assert.ok(result.data.pnl < 0, `pnl should be slightly negative, got ${result.data.pnl}`);
-      assert.ok(result.data.pnl > -1, `pnl should be near zero, got ${result.data.pnl}`);
-      assert.equal(result.data.profit_or_loss, "loss");
+      // usdIn = 37.6 * 1.33 = 50.008; usdOut = 37.6 * 1.33 = 50.008; pnl ≈ 0
+      assert.ok(Math.abs(result.data.pnl) < 0.001, `pnl should be ~0 for break-even trade, got ${result.data.pnl}`);
     });
 
     it("falls back to raw amount diff when no USD prices provided (backward compat)", async () => {
@@ -749,6 +745,70 @@ describe("ton-trading-bot plugin", () => {
       );
       assert.equal(result.success, true);
       assert.equal(result.data.entry_price_usd, 1);
+    });
+
+    it("calculates P&L correctly for TON→USDT position (issue #129): small price move yields tiny pnl", async () => {
+      // Reproduces issue #129: Position 28 — 10 TON at entry $1.240, exit $1.249
+      // Expected: pnl ≈ +$0.09, pnl_percent ≈ +0.73%
+      // Buggy behaviour: showed +$16.24 / +13,310% (amount_out multiplied by exit_price of wrong asset)
+      const openTrade = {
+        id: 28,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "USDT",
+        amount_in: 10,            // 10 TON
+        entry_price_usd: 1.240,   // TON price at entry
+        amount_out: null,
+        status: "open",
+      };
+      const sdk = makeSdk({ dbRows: { trade: openTrade } });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      // Close: received ~12.49 USDT, TON exit price is $1.249
+      const result = await tool.execute(
+        { trade_id: 28, amount_out: 12.49, exit_price_usd: 1.249 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // pnl = 10 * 1.249 - 10 * 1.240 = 12.49 - 12.40 = 0.09
+      assert.ok(result.data.pnl > 0, `pnl should be positive (~+0.09), got ${result.data.pnl}`);
+      assert.ok(result.data.pnl < 1, `pnl should be small (~+0.09), got ${result.data.pnl}`);
+      assert.ok(
+        result.data.pnl_percent > 0 && result.data.pnl_percent < 2,
+        `pnl_percent should be ~+0.73%, got ${result.data.pnl_percent}`
+      );
+      assert.equal(result.data.profit_or_loss, "profit");
+    });
+
+    it("calculates P&L correctly for TON→USDT position (issue #129): small price drop yields tiny loss", async () => {
+      // Reproduces issue #129: Position 29 — 50 TON at entry $1.252, exit $1.251
+      // Expected: pnl ≈ -$0.05, pnl_percent ≈ -0.08%
+      // Buggy behaviour: showed -$45.22 / -73.53%
+      const openTrade = {
+        id: 29,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "USDT",
+        amount_in: 50,            // 50 TON
+        entry_price_usd: 1.252,   // TON price at entry
+        amount_out: null,
+        status: "open",
+      };
+      const sdk = makeSdk({ dbRows: { trade: openTrade } });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      // Close: received ~62.55 USDT, TON exit price is $1.251
+      const result = await tool.execute(
+        { trade_id: 29, amount_out: 62.55, exit_price_usd: 1.251 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // pnl = 50 * 1.251 - 50 * 1.252 = 62.55 - 62.60 = -0.05
+      assert.ok(result.data.pnl < 0, `pnl should be negative (~-0.05), got ${result.data.pnl}`);
+      assert.ok(result.data.pnl > -1, `pnl should be small (~-0.05), got ${result.data.pnl}`);
+      assert.ok(
+        result.data.pnl_percent < 0 && result.data.pnl_percent > -1,
+        `pnl_percent should be ~-0.08%, got ${result.data.pnl_percent}`
+      );
+      assert.equal(result.data.profit_or_loss, "loss");
     });
   });
 
@@ -1474,10 +1534,10 @@ describe("ton-trading-bot plugin", () => {
   // ── ton_trading_record_trade: simulation balance bug fix ────────────────────
   describe("ton_trading_record_trade simulation balance credit-back (issue #96)", () => {
     it("credits principal + profit back when from_asset is TON and USD prices are provided", async () => {
-      // Reproduces issue #96: 13 TON → USDT trade, exit_price_usd=1, entry_price_usd=1.33 (TON price)
-      // pnl_usd = (amount_out * exit_price_usd) - (amount_in * entry_price_usd)
-      //         = (17.39 * 1) - (13 * 1.33) = 17.39 - 17.29 = 0.10 USD
-      // credit_ton = amount_in + pnl_usd / entry_price_usd = 13 + 0.10/1.33 ≈ 13.075
+      // 13 TON → USDT trade; entry_price_usd=1.33 (TON at open), exit_price_usd=1.34 (TON rose slightly)
+      // Both prices refer to from_asset (TON) per the corrected semantics.
+      // pnl_usd = amount_in * (exit_price - entry_price) = 13 * (1.34 - 1.33) = 13 * 0.01 = 0.13 USD
+      // credit_ton = amount_in + pnl_usd / entry_price_usd = 13 + 0.13/1.33 ≈ 13.098
       const openTrade = {
         id: 100,
         mode: "simulation",
@@ -1510,12 +1570,12 @@ describe("ton-trading-bot plugin", () => {
       };
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
       const result = await tool.execute(
-        { trade_id: 100, amount_out: 17.39, exit_price_usd: 1 },
+        { trade_id: 100, amount_out: 17.42, exit_price_usd: 1.34 },
         makeContext()
       );
       assert.equal(result.success, true);
       assert.ok(savedBalance !== null, "simulation balance should be updated on close");
-      // Expected: 50 (prev balance) + 13 (principal) + pnl_ton ≈ 50 + 13 + 0.075 ≈ 63.075
+      // Expected: 50 (prev balance) + 13 (principal) + 0.13/1.33 ≈ 63.098
       assert.ok(savedBalance > 63, `balance should be restored to ~63+, got ${savedBalance}`);
       assert.ok(savedBalance < 64, `balance should be around 63, got ${savedBalance}`);
     });
@@ -1600,9 +1660,9 @@ describe("ton-trading-bot plugin", () => {
     });
 
     it("credits back principal + loss when trade is a loss (TON→USDT losing trade)", async () => {
-      // 10 TON → USDT at $2/TON (entry), exit at $1.5/TON equivalent → loss
-      // amount_out = 15 USDT, exit_price_usd = 1 (USDT price)
-      // usdOut = 15, usdIn = 10 * 2 = 20, pnl = -5 USD
+      // 10 TON → USDT at $2/TON (entry), TON dropped to $1.5 at exit → loss
+      // exit_price_usd = 1.5 (TON exit price, from_asset price at close)
+      // usdOut = 10 * 1.5 = 15, usdIn = 10 * 2 = 20, pnl = -5 USD
       // credit_ton = 10 + (-5/2) = 10 - 2.5 = 7.5 TON
       const openTrade = {
         id: 103,
@@ -1636,7 +1696,7 @@ describe("ton-trading-bot plugin", () => {
       };
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
       const result = await tool.execute(
-        { trade_id: 103, amount_out: 15, exit_price_usd: 1 },
+        { trade_id: 103, amount_out: 15, exit_price_usd: 1.5 },
         makeContext()
       );
       assert.equal(result.success, true);

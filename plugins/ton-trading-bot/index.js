@@ -584,7 +584,7 @@ export const tools = (sdk) => [
         },
         exit_price_usd: {
           type: "number",
-          description: "USD price of to_asset at trade exit. Required for accurate P&L when trading between non-USD pairs (e.g. TON/USDT). Obtain from ton_trading_get_market_data.",
+          description: "USD price of from_asset at trade exit. Must match the same asset as entry_price_usd (e.g. if you sold TON, provide TON's USD price at the time of closing). Obtain from ton_trading_get_market_data.",
         },
         note: {
           type: "string",
@@ -608,12 +608,13 @@ export const tools = (sdk) => [
           return { success: false, error: `Trade ${trade_id} is already closed` };
         }
 
-        // Convert amounts to USD when prices are available to handle cross-currency P&L.
-        // Example: 50 USDT → 37.6 TON. Without conversion, pnl = 37.6 - 50 = -12.4 (wrong).
-        // With prices: usdOut = 37.6 * 1.33 = 50.008, usdIn = 50 * 1 = 50, pnl = 0.008 (correct).
-        const entryPriceUsd = entry.entry_price_usd ?? exit_price_usd ?? null;
-        const usdIn = entryPriceUsd != null ? entry.amount_in * entryPriceUsd : entry.amount_in;
-        const usdOut = exit_price_usd != null ? amount_out * exit_price_usd : amount_out;
+        // Calculate P&L in USD using the from_asset prices at entry and exit.
+        // Both entry_price_usd and exit_price_usd represent the USD price of from_asset
+        // (the asset that was sold), so P&L = amount_in × (exit_price - entry_price).
+        // Example: 10 TON at entry $1.240, exit $1.249 → pnl = 10 × (1.249 - 1.240) = +$0.09
+        // Fallback (no prices): use raw amounts directly (same-asset trade, e.g. TON→TON).
+        const usdIn = entry.entry_price_usd != null ? entry.amount_in * entry.entry_price_usd : entry.amount_in;
+        const usdOut = exit_price_usd != null ? entry.amount_in * exit_price_usd : amount_out;
 
         const pnl = usdOut - usdIn;
         const pnlPercent =
