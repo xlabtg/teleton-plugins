@@ -15,7 +15,7 @@
  */
 
 import { createGitHubClient } from "./github-client.js";
-import { decodeBase64, encodeBase64, validateRequired, validateEnum, clampInt, formatError } from "./utils.js";
+import { decodeBase64, encodeBase64, validateRequired, validateRepoPath, validateEnum, clampInt, formatError } from "./utils.js";
 
 /**
  * Build repository operations tools.
@@ -266,6 +266,9 @@ export function buildRepoOpsTools(sdk) {
           const check = validateRequired(params, ["owner", "repo", "path"]);
           if (!check.valid) return { success: false, error: check.error };
 
+          const pathCheck = validateRepoPath(params.path);
+          if (!pathCheck.valid) return { success: false, error: pathCheck.error };
+
           const client = createGitHubClient(sdk);
           const queryParams = {};
           if (params.ref) queryParams.ref = params.ref;
@@ -375,6 +378,9 @@ export function buildRepoOpsTools(sdk) {
         try {
           const check = validateRequired(params, ["owner", "repo", "path", "content", "message"]);
           if (!check.valid) return { success: false, error: check.error };
+
+          const pathCheck = validateRepoPath(params.path);
+          if (!pathCheck.valid) return { success: false, error: pathCheck.error };
 
           const client = createGitHubClient(sdk);
 

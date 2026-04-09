@@ -80,6 +80,31 @@ export function clampInt(value, min, max, defaultValue) {
 }
 
 /**
+ * Validate that a repository file path does not contain directory traversal sequences.
+ *
+ * Rules:
+ *  1. Must not contain '..' path components (e.g. '../etc/passwd', 'a/../../b').
+ *  2. Must not start with '/' (paths are always relative within a repository).
+ *
+ * @param {string} path - The path parameter supplied by the caller.
+ * @returns {{ valid: boolean, error?: string }}
+ */
+export function validateRepoPath(path) {
+  if (typeof path !== "string") {
+    return { valid: false, error: "Path must be a string." };
+  }
+  if (path.startsWith("/")) {
+    return { valid: false, error: "Path must not start with '/'. Repository paths are relative (e.g. 'src/index.js')." };
+  }
+  // Split on both forward and backward slashes and check each segment
+  const segments = path.split(/[/\\]/);
+  if (segments.some((seg) => seg === "..")) {
+    return { valid: false, error: "Path must not contain '..' directory traversal sequences." };
+  }
+  return { valid: true };
+}
+
+/**
  * Validate an enum value against an allowed list.
  * @param {string|undefined} value
  * @param {string[]} allowed

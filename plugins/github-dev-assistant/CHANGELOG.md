@@ -5,6 +5,15 @@ All notable changes to `github-dev-assistant` are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2] - 2026-04-07
+
+### Security
+- **Fix path traversal vulnerability in repository path parameters** (issue #115)
+  - Added `validateRepoPath` helper in `utils.js` to reject paths containing `..` directory traversal segments or starting with `/`
+  - Applied the check to `github_get_file`, `github_update_file` (in `repo-ops.js`) and `github_delete_file`, `github_list_directory`, `github_list_files`, `github_download_file` (in `file-ops.js`)
+  - Paths like `../.github/workflows/deploy.yml` or `/etc/passwd` are now rejected with a clear error before any API call is made
+  - Added `repo-ops.test.js` with 20 unit tests covering traversal attacks, absolute paths, edge cases, and valid paths
+
 ## [3.1.1] - 2026-03-27
 
 ### Security

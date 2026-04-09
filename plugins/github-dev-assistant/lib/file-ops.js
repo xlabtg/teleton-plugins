@@ -16,7 +16,7 @@
 
 import { resolve, isAbsolute, normalize } from "node:path";
 import { createGitHubClient } from "./github-client.js";
-import { decodeBase64, validateRequired, formatError } from "./utils.js";
+import { decodeBase64, validateRequired, validateRepoPath, formatError } from "./utils.js";
 
 /**
  * Validate that a local file path is safe to write to.
@@ -116,6 +116,9 @@ export function buildFileOpsTools(sdk) {
           const check = validateRequired(params, ["owner", "repo", "path", "message", "sha"]);
           if (!check.valid) return { success: false, error: check.error };
 
+          const pathCheck = validateRepoPath(params.path);
+          if (!pathCheck.valid) return { success: false, error: pathCheck.error };
+
           const client = createGitHubClient(sdk);
 
           const authorName =
@@ -195,6 +198,11 @@ export function buildFileOpsTools(sdk) {
         try {
           const check = validateRequired(params, ["owner", "repo"]);
           if (!check.valid) return { success: false, error: check.error };
+
+          if (params.path) {
+            const pathCheck = validateRepoPath(params.path);
+            if (!pathCheck.valid) return { success: false, error: pathCheck.error };
+          }
 
           const client = createGitHubClient(sdk);
           const queryParams = {};
@@ -279,6 +287,11 @@ export function buildFileOpsTools(sdk) {
         try {
           const check = validateRequired(params, ["owner", "repo"]);
           if (!check.valid) return { success: false, error: check.error };
+
+          if (params.path) {
+            const pathCheck = validateRepoPath(params.path);
+            if (!pathCheck.valid) return { success: false, error: pathCheck.error };
+          }
 
           const client = createGitHubClient(sdk);
           const queryParams = {};
@@ -458,6 +471,9 @@ export function buildFileOpsTools(sdk) {
         try {
           const check = validateRequired(params, ["owner", "repo", "path"]);
           if (!check.valid) return { success: false, error: check.error };
+
+          const pathCheck = validateRepoPath(params.path);
+          if (!pathCheck.valid) return { success: false, error: pathCheck.error };
 
           const client = createGitHubClient(sdk);
           const queryParams = {};
