@@ -631,14 +631,16 @@ export const tools = (sdk) => [
         // If simulation trade was opened with TON, credit back principal + profit/loss in TON.
         // The balance was decremented by amount_in (TON) on open; on close we restore it.
         // When USD prices are available the pnl is in USD — convert back to TON using
-        // the entry price (USD price of TON at trade open).  When no prices were provided
-        // (same-asset TON→TON trade) the raw amount_out is already in TON.
+        // the exit price (USD price of TON at trade close).  Using the exit price correctly
+        // reflects how much TON the USD profit buys at the current market rate.
+        // Example: pnl=$1.995 at exit $1.393/TON → 1.432 TON added (not 1.583 with entry $1.26).
+        // When no prices were provided (same-asset TON→TON trade) the raw amount_out is in TON.
         if (entry.mode === "simulation" && entry.from_asset === "TON") {
           const simBalance = getSimBalance(sdk);
-          const entryTonPriceUsd = entry.entry_price_usd ?? null;
+          const exitTonPriceUsd = exit_price_usd ?? entry.entry_price_usd ?? null;
           const creditTon =
-            entryTonPriceUsd != null
-              ? entry.amount_in + pnl / entryTonPriceUsd
+            exitTonPriceUsd != null
+              ? entry.amount_in + pnl / exitTonPriceUsd
               : amount_out; // same-currency (TON→TON): just return what came out
           setSimBalance(sdk, simBalance + creditTon);
         }
