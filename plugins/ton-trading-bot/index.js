@@ -124,7 +124,10 @@ export function migrate(db) {
       take_profit_percent REAL,          -- optional take-profit level
       entry_price REAL NOT NULL,
       created_at INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active'  -- 'active' | 'triggered' | 'cancelled'
+      status TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'triggered' | 'cancelled'
+      trailing_stop INTEGER NOT NULL DEFAULT 0,        -- 1 if trailing stop is active
+      trailing_stop_percent REAL,                      -- trailing offset below peak price
+      peak_price REAL                                  -- highest price seen (for trailing stop)
     );
 
     -- Scheduled trades: pending orders for future execution
@@ -146,6 +149,9 @@ export function migrate(db) {
   const alterColumns = [
     "ALTER TABLE trade_journal ADD COLUMN entry_price_usd REAL",
     "ALTER TABLE trade_journal ADD COLUMN exit_price_usd REAL",
+    "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop_percent REAL",
+    "ALTER TABLE stop_loss_rules ADD COLUMN peak_price REAL",
   ];
   for (const sql of alterColumns) {
     try {
@@ -1865,7 +1871,20 @@ export const tools = (sdk) => [
         const safe = [];
 
         for (const rule of activeRules) {
-          const stopLossPrice = rule.entry_price * (1 - rule.stop_loss_percent / 100);
+          // For trailing stops: update peak_price if price moved higher, then compute stop from peak
+          let effectivePeak = rule.peak_price ?? rule.entry_price;
+          let trailingStopPrice = null;
+          if (rule.trailing_stop && rule.trailing_stop_percent != null) {
+            if (current_price > effectivePeak) {
+              effectivePeak = current_price;
+              sdk.db
+                .prepare("UPDATE stop_loss_rules SET peak_price = ? WHERE id = ?")
+                .run(effectivePeak, rule.id);
+            }
+            trailingStopPrice = effectivePeak * (1 - rule.trailing_stop_percent / 100);
+          }
+
+          const stopLossPrice = trailingStopPrice ?? rule.entry_price * (1 - rule.stop_loss_percent / 100);
           const takeProfitPrice = rule.take_profit_percent != null
             ? rule.entry_price * (1 + rule.take_profit_percent / 100)
             : null;
@@ -1884,6 +1903,9 @@ export const tools = (sdk) => [
             take_profit_percent: rule.take_profit_percent ?? null,
             stop_loss_hit: stopLossHit,
             take_profit_hit: takeProfitHit,
+            trailing_stop: rule.trailing_stop === 1,
+            trailing_stop_percent: rule.trailing_stop_percent ?? null,
+            peak_price: rule.trailing_stop === 1 ? parseFloat(effectivePeak.toFixed(6)) : null,
           };
 
           if (stopLossHit || takeProfitHit) {
@@ -2282,16 +2304,23 @@ export const tools = (sdk) => [
         }
 
         // Use a very large stop-loss (99%) to create a take-profit-only rule via the existing table
+        const trailingOffset = trailing_stop_percent ?? take_profit_percent / 2;
         const ruleId = sdk.db
           .prepare(
-            `INSERT INTO stop_loss_rules (trade_id, stop_loss_percent, take_profit_percent, entry_price, created_at)
-             VALUES (?, ?, ?, ?, ?)`
+            `INSERT INTO stop_loss_rules
+               (trade_id, stop_loss_percent, take_profit_percent, entry_price, created_at,
+                trailing_stop, trailing_stop_percent, peak_price)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           )
-          .run(trade_id, 99, take_profit_percent, entry_price, Date.now())
+          .run(
+            trade_id, 99, take_profit_percent, entry_price, Date.now(),
+            trailing_stop ? 1 : 0,
+            trailing_stop ? trailingOffset : null,
+            trailing_stop ? entry_price : null
+          )
           .lastInsertRowid;
 
         const takeProfitPrice = entry_price * (1 + take_profit_percent / 100);
-        const trailingOffset = trailing_stop_percent ?? take_profit_percent / 2;
 
         sdk.log.info(
           `Take-profit rule #${ruleId} set for trade #${trade_id}: TP=${takeProfitPrice.toFixed(4)}` +
@@ -2429,6 +2458,48 @@ export const tools = (sdk) => [
               current_price: currentPrice,
             },
           };
+        }
+
+        // ── Risk validation (same rules as ton_trading_validate_trade) ──────────
+        const maxTradePercent = sdk.pluginConfig.maxTradePercent ?? 10;
+        const minBalanceTON = sdk.pluginConfig.minBalanceTON ?? 1;
+
+        if (mode === "simulation" && from_asset === "TON") {
+          const simBalance = getSimBalance(sdk);
+          const maxAllowed = simBalance * (maxTradePercent / 100);
+          if (simBalance < minBalanceTON) {
+            return {
+              success: false,
+              error: `Simulation balance (${simBalance} TON) is below minimum (${minBalanceTON} TON)`,
+            };
+          }
+          if (amount > maxAllowed) {
+            return {
+              success: false,
+              error: `Amount ${amount} TON exceeds ${maxTradePercent}% of simulation balance (max ${maxAllowed.toFixed(4)} TON)`,
+            };
+          }
+          if (simBalance - amount < minBalanceTON) {
+            return {
+              success: false,
+              error: `Trade would bring simulation balance below minimum (${minBalanceTON} TON)`,
+            };
+          }
+        } else if (mode === "real" && from_asset === "TON") {
+          const realBalance = parseFloat((await sdk.ton.getBalance())?.balance ?? "0");
+          const maxAllowed = realBalance * (maxTradePercent / 100);
+          if (realBalance < minBalanceTON) {
+            return {
+              success: false,
+              error: `Wallet balance (${realBalance} TON) is below minimum (${minBalanceTON} TON)`,
+            };
+          }
+          if (amount > maxAllowed) {
+            return {
+              success: false,
+              error: `Amount ${amount} TON exceeds ${maxTradePercent}% of balance (max ${maxAllowed.toFixed(4)} TON)`,
+            };
+          }
         }
 
         // Execute the trade
@@ -2645,15 +2716,47 @@ export const tools = (sdk) => [
           jettonHoldings = await sdk.ton.getJettonBalances().catch(() => []);
         }
 
+        // For each unique jetton in target_allocations, fetch a DEX quote to convert
+        // token balance → USD value. Raw token units are NOT USD for non-stable assets.
+        const jettonPricesUsd = {};
+        for (const target of target_allocations) {
+          if (target.asset !== "TON") {
+            const holding = jettonHoldings.find((j) => j.jettonAddress === target.asset);
+            if (holding && parseFloat(holding.balanceFormatted ?? holding.balance ?? "0") > 0) {
+              const tokenBalance = parseFloat(holding.balanceFormatted ?? holding.balance ?? "0");
+              // Quote 1 unit of the jetton to TON to get the price
+              const priceQuote = await sdk.ton.dex.quote({
+                fromAsset: target.asset,
+                toAsset: "TON",
+                amount: 1,
+              }).catch(() => null);
+              if (priceQuote) {
+                const tonPerToken = parseFloat(
+                  priceQuote[priceQuote.recommended]?.output ??
+                  priceQuote[priceQuote.recommended]?.price ??
+                  0
+                );
+                jettonPricesUsd[target.asset] = {
+                  tokenBalance,
+                  valueUsd: tokenBalance * tonPerToken * tonPriceUsd,
+                };
+              }
+            }
+          }
+        }
+
         const rebalancingPlan = target_allocations.map((target) => {
           const targetValueUsd = totalValueUsd * (target.percent / 100);
           let currentValueUsd = 0;
 
           if (target.asset === "TON") {
             currentValueUsd = totalBalance * tonPriceUsd;
+          } else if (jettonPricesUsd[target.asset]) {
+            // Use market-price-based USD value for jetton holdings
+            currentValueUsd = jettonPricesUsd[target.asset].valueUsd;
           } else {
-            const holding = jettonHoldings.find((j) => j.jettonAddress === target.asset);
-            currentValueUsd = holding ? parseFloat(holding.balanceFormatted ?? holding.balance ?? 0) : 0;
+            // No holding or no price available — assume zero current value
+            currentValueUsd = 0;
           }
 
           const diffUsd = targetValueUsd - currentValueUsd;
@@ -3657,9 +3760,9 @@ export const tools = (sdk) => [
         const amountNum = parseFloat(amount);
         const quoteParams = { fromAsset: from_asset, toAsset: to_asset, amount: amountNum };
 
-        const dexFees = { stonfi: 0.003, dedust: 0.003 };
+        const dexFees = { stonfi: 0.003, dedust: 0.003, tonco: 0.003 };
 
-        const [stonfiQuote, dedustQuote] = await Promise.all([
+        const [stonfiQuote, dedustQuote, toncoQuote] = await Promise.all([
           sdk.ton.dex.quoteSTONfi(quoteParams).catch((err) => {
             sdk.log.warn(`StonFi quote failed: ${err.message}`);
             return null;
@@ -3668,6 +3771,12 @@ export const tools = (sdk) => [
             sdk.log.warn(`DeDust quote failed: ${err.message}`);
             return null;
           }),
+          sdk.ton.dex.quoteTONCO
+            ? sdk.ton.dex.quoteTONCO(quoteParams).catch((err) => {
+                sdk.log.warn(`TONCO quote failed: ${err.message}`);
+                return null;
+              })
+            : Promise.resolve(null),
         ]);
 
         const results = [];
@@ -3693,6 +3802,18 @@ export const tools = (sdk) => [
             effective_price: output > 0 ? output / amountNum : null,
             fee_amount: fee,
             output_after_fee: output * (1 - dexFees.dedust),
+          });
+        }
+
+        if (toncoQuote) {
+          const output = parseFloat(toncoQuote.output ?? toncoQuote.price ?? 0);
+          const fee = amountNum * dexFees.tonco;
+          results.push({
+            dex: "tonco",
+            output_amount: output,
+            effective_price: output > 0 ? output / amountNum : null,
+            fee_amount: fee,
+            output_after_fee: output * (1 - dexFees.tonco),
           });
         }
 

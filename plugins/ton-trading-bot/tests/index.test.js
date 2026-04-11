@@ -1892,6 +1892,65 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.trailing_stop_percent, 5);
     });
 
+    it("persists trailing_stop and trailing_stop_percent in the database row", async () => {
+      let insertedValues = null;
+      const sdk = makeSdk({
+        dbRows: { trade: { id: 4, status: "open" } },
+      });
+      // Override db.prepare to capture the INSERT values
+      const origPrepare = sdk.db.prepare.bind(sdk.db);
+      sdk.db.prepare = (sql) => {
+        if (sql.includes("INSERT INTO stop_loss_rules")) {
+          return {
+            run: (...args) => {
+              insertedValues = args;
+              return { lastInsertRowid: 7 };
+            },
+          };
+        }
+        return origPrepare(sql);
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_set_take_profit");
+      await tool.execute(
+        { trade_id: 4, entry_price: 3.0, take_profit_percent: 20, trailing_stop: true, trailing_stop_percent: 8 },
+        makeContext()
+      );
+      // insertedValues: [trade_id, stop_loss_percent, take_profit_percent, entry_price, created_at, trailing_stop, trailing_stop_percent, peak_price]
+      assert.ok(insertedValues !== null, "INSERT should have been called");
+      // trailing_stop flag (1-indexed position 6 = index 5)
+      assert.equal(insertedValues[5], 1, "trailing_stop should be 1 in DB");
+      assert.equal(insertedValues[6], 8, "trailing_stop_percent should be persisted");
+      assert.equal(insertedValues[7], 3.0, "peak_price should be set to entry_price initially");
+    });
+
+    it("does not persist trailing stop fields when trailing_stop is false", async () => {
+      let insertedValues = null;
+      const sdk = makeSdk({
+        dbRows: { trade: { id: 5, status: "open" } },
+      });
+      const origPrepare = sdk.db.prepare.bind(sdk.db);
+      sdk.db.prepare = (sql) => {
+        if (sql.includes("INSERT INTO stop_loss_rules")) {
+          return {
+            run: (...args) => {
+              insertedValues = args;
+              return { lastInsertRowid: 8 };
+            },
+          };
+        }
+        return origPrepare(sql);
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_set_take_profit");
+      await tool.execute(
+        { trade_id: 5, entry_price: 1.0, take_profit_percent: 10 },
+        makeContext()
+      );
+      assert.ok(insertedValues !== null, "INSERT should have been called");
+      assert.equal(insertedValues[5], 0, "trailing_stop should be 0 when not enabled");
+      assert.equal(insertedValues[6], null, "trailing_stop_percent should be null when not enabled");
+      assert.equal(insertedValues[7], null, "peak_price should be null when trailing_stop is false");
+    });
+
     it("fails when trade is not found", async () => {
       const sdk = makeSdk({ dbRows: { trade: null } });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_set_take_profit");
@@ -1960,6 +2019,51 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.equal(result.data.executed, true);
     });
+
+    it("rejects simulation trade when amount exceeds maxTradePercent", async () => {
+      // simBalance = 100 TON, maxTradePercent = 10 → max = 10 TON; amount = 50 TON → should fail
+      const sdk = makeSdk({
+        pluginConfig: { maxTradePercent: 10, minBalanceTON: 1 },
+        dbRows: { simBalance: { balance: 100 } },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: 50, mode: "simulation" },
+        makeContext()
+      );
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("maxTradePercent") || result.error.includes("10%") || result.error.includes("exceeds"), `Unexpected error: ${result.error}`);
+    });
+
+    it("rejects simulation trade when sim balance is below minBalanceTON", async () => {
+      // simBalance = 0.5 TON, minBalanceTON = 1 → should fail
+      const sdk = makeSdk({
+        pluginConfig: { maxTradePercent: 10, minBalanceTON: 1 },
+        dbRows: { simBalance: { balance: 0.5 } },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: 0.1, mode: "simulation" },
+        makeContext()
+      );
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("minimum") || result.error.includes("below"), `Unexpected error: ${result.error}`);
+    });
+
+    it("rejects simulation trade when trade would bring balance below minBalanceTON floor", async () => {
+      // simBalance = 5 TON, minBalanceTON = 1, amount = 4.5 → remaining = 0.5 < 1 → should fail
+      const sdk = makeSdk({
+        pluginConfig: { maxTradePercent: 100, minBalanceTON: 1 },
+        dbRows: { simBalance: { balance: 5 } },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: 4.5, mode: "simulation" },
+        makeContext()
+      );
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("minimum") || result.error.includes("below"), `Unexpected error: ${result.error}`);
+    });
   });
 
   // ── ton_trading_get_portfolio_summary ──────────────────────────────────────
@@ -2014,6 +2118,52 @@ describe("ton-trading-bot plugin", () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_rebalance_portfolio");
       assert.ok(tool.parameters?.required?.includes("target_allocations"));
+    });
+
+    it("uses DEX quote to price jetton holdings, not raw token balance", async () => {
+      // Jetton balance = 100 tokens; each token is worth 0.5 TON; TON = 3.5 USD
+      // → jetton value = 100 * 0.5 * 3.5 = 175 USD (NOT 100 USD from raw balance)
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [
+            { jettonAddress: "EQJettonTest", balanceFormatted: "100", balance: "100" },
+          ],
+          dex: {
+            quote: async (params) => {
+              if (params.fromAsset === "EQJettonTest" && params.toAsset === "TON") {
+                // 1 token = 0.5 TON
+                return { stonfi: { output: "0.5", price: "0.5" }, recommended: "stonfi" };
+              }
+              return { stonfi: { output: "10.5", price: "10.5" }, recommended: "stonfi" };
+            },
+            quoteSTONfi: async () => ({ output: "10.5", price: "10.5" }),
+            quoteDeDust: async () => ({ output: "10.3", price: "10.3" }),
+            swap: async () => ({ expectedOutput: "10.5", dex: "stonfi" }),
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_rebalance_portfolio");
+      const result = await tool.execute(
+        {
+          target_allocations: [
+            { asset: "TON", percent: 50 },
+            { asset: "EQJettonTest", percent: 50 },
+          ],
+          mode: "real",
+        },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      const jettonEntry = result.data.rebalancing_plan.find((p) => p.asset === "EQJettonTest");
+      assert.ok(jettonEntry, "jetton should appear in rebalancing plan");
+      // 100 tokens * 0.5 TON/token * 3.5 USD/TON = 175 USD
+      assert.ok(
+        jettonEntry.current_value_usd > 100,
+        `Jetton value should use market price (expected >100 USD from DEX quote), got ${jettonEntry.current_value_usd}`
+      );
     });
   });
 
@@ -2241,6 +2391,62 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(tool.parameters?.required?.includes("from_asset"));
       assert.ok(tool.parameters?.required?.includes("to_asset"));
       assert.ok(tool.parameters?.required?.includes("amount"));
+    });
+
+    it("includes TONCO in comparison when quoteTONCO is available", async () => {
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "10.5", price: "10.5" }, recommended: "stonfi" }),
+            quoteSTONfi: async () => ({ output: "10.5", price: "10.5" }),
+            quoteDeDust: async () => ({ output: "10.3", price: "10.3" }),
+            quoteTONCO: async () => ({ output: "10.8", price: "10.8" }),
+            swap: async () => ({ expectedOutput: "10.5", dex: "stonfi" }),
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_best_price");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: "1" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      const dexNames = result.data.dex_comparison.map((d) => d.dex);
+      assert.ok(dexNames.includes("tonco"), `TONCO should be included in comparison, got: ${dexNames.join(", ")}`);
+      // TONCO has the highest output (10.8), so it should be the best
+      assert.equal(result.data.best_dex, "tonco", `TONCO should be best dex with output 10.8`);
+    });
+
+    it("works correctly when quoteTONCO is not available in SDK (graceful fallback)", async () => {
+      // Simulate older SDK that doesn't have quoteTONCO
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "10.5", price: "10.5" }, recommended: "stonfi" }),
+            quoteSTONfi: async () => ({ output: "10.5", price: "10.5" }),
+            quoteDeDust: async () => ({ output: "10.3", price: "10.3" }),
+            // quoteTONCO intentionally omitted
+            swap: async () => ({ expectedOutput: "10.5", dex: "stonfi" }),
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_best_price");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: "1" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      const dexNames = result.data.dex_comparison.map((d) => d.dex);
+      assert.ok(!dexNames.includes("tonco"), "TONCO should not appear when quoteTONCO is unavailable");
+      assert.ok(dexNames.includes("stonfi"), "StonFi should still appear");
     });
   });
 
