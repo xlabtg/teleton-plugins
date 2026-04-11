@@ -932,10 +932,12 @@ const toncoExecuteSwap = {
       // User input jetton wallet (from SDK)
       let userJettonInWallet;
       if (isTonIn) {
-        // For TON->Jetton, the "userJettonInWallet" is the pTON wallet
+        // For TON->Jetton, the "userJettonInWallet" is the pTON wallet.
+        // Use tokenIn (the actual TON-side token) rather than hardcoding j0Data,
+        // because TON can be either jetton0 or jetton1 depending on the pool.
         userJettonInWallet = Address.parse(isV1_5
-          ? (j0Data.walletV1_5 ?? j0Data.wallet)
-          : j0Data.wallet);
+          ? (tokenIn.walletV1_5 ?? tokenIn.wallet)
+          : tokenIn.wallet);
       } else {
         // Get user's jetton wallet from chain
         const client = await getTonClient();
@@ -957,11 +959,13 @@ const toncoExecuteSwap = {
         swapType,
       );
 
-      // Send transaction via SDK
+      // Send transaction via SDK, passing msg.body so the swap instruction
+      // is actually included in the on-chain message. Without the body the
+      // router/pTON wallet receives a plain TON transfer and ignores the swap.
       await _sdk.ton.sendTON(
         msg.to.toString(),
         parseFloat(msg.value.toString()) / 1e9,
-        undefined
+        msg.body
       );
 
       _sdk?.log?.info(`tonco_execute_swap: swap initiated ${amountInStr} ${tokenIn.symbol} -> ${tokenOut.symbol}`);
