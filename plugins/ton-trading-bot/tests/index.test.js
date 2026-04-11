@@ -1302,6 +1302,99 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.triggered_rules.length, 0);
       assert.equal(result.data.safe_rules.length, 0);
     });
+
+    it("trailing stop: does NOT trigger take_profit when price merely reaches the original TP level", async () => {
+      // entry=100, take_profit_percent=20 → static TP price=120
+      // With trailing_stop=true, touching 120 should NOT immediately close the trade —
+      // the trade should only close when price pulls back below the trailing floor.
+      let updatedPeak = null;
+      const trailingRule = {
+        id: 5, trade_id: 5, entry_price: 100,
+        stop_loss_percent: 10, take_profit_percent: 20,
+        trailing_stop: 1, trailing_stop_percent: 5,
+        peak_price: 100, status: "active",
+      };
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => null,
+            all: () => [trailingRule],
+            run: (val, id) => {
+              // Capture the peak_price update
+              if (sql.includes("UPDATE stop_loss_rules SET peak_price")) updatedPeak = val;
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_check_stop_loss");
+      // Price at exactly the static TP level (120) — should NOT trigger with trailing stop
+      const result = await tool.execute({ current_price: 120 }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.triggered_rules.length, 0,
+        "Trailing stop should NOT trigger take_profit when price merely reaches the static TP level");
+      assert.equal(result.data.safe_rules.length, 1);
+      // Peak should have been updated to 120
+      assert.equal(updatedPeak, 120, "Peak price should be updated to current price when price rises");
+    });
+
+    it("trailing stop: triggers when price pulls back below trailing floor from peak", async () => {
+      // entry=100, trailing_stop_percent=5, peak_price=130 → trailing floor = 130*0.95 = 123.5
+      // Current price = 123 → below floor → should trigger
+      const trailingRule = {
+        id: 6, trade_id: 6, entry_price: 100,
+        stop_loss_percent: 10, take_profit_percent: 20,
+        trailing_stop: 1, trailing_stop_percent: 5,
+        peak_price: 130, status: "active",
+      };
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({
+            get: () => null,
+            all: () => [trailingRule],
+            run: () => ({ lastInsertRowid: 1 }),
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_check_stop_loss");
+      // trailing floor = 130 * (1 - 5/100) = 123.5; price=123 < 123.5 → should trigger
+      const result = await tool.execute({ current_price: 123 }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.triggered_rules.length, 1,
+        "Trailing stop should trigger when price pulls back below the trailing floor");
+      assert.equal(result.data.triggered_rules[0].action, "take_profit");
+      assert.equal(result.data.triggered_rules[0].take_profit_hit, true);
+    });
+
+    it("trailing stop: remains safe while price stays above trailing floor", async () => {
+      // entry=100, trailing_stop_percent=5, peak_price=130 → trailing floor = 123.5
+      // Current price = 125 → above floor → safe
+      const trailingRule = {
+        id: 7, trade_id: 7, entry_price: 100,
+        stop_loss_percent: 10, take_profit_percent: 20,
+        trailing_stop: 1, trailing_stop_percent: 5,
+        peak_price: 130, status: "active",
+      };
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({
+            get: () => null,
+            all: () => [trailingRule],
+            run: () => ({ lastInsertRowid: 1 }),
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_check_stop_loss");
+      // trailing floor = 123.5; price=125 > 123.5 → safe
+      const result = await tool.execute({ current_price: 125 }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.triggered_rules.length, 0,
+        "Trailing stop should NOT trigger while price stays above trailing floor");
+      assert.equal(result.data.safe_rules.length, 1);
+    });
   });
 
   // ── ton_trading_get_optimal_position_size ──────────────────────────────────
@@ -2163,6 +2256,60 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(
         jettonEntry.current_value_usd > 100,
         `Jetton value should use market price (expected >100 USD from DEX quote), got ${jettonEntry.current_value_usd}`
+      );
+    });
+
+    it("total_portfolio_value_usd includes both TON balance and jetton holdings", async () => {
+      // TON balance = 50 TON, TON price = 4 USD → ton_balance_usd = 200 USD
+      // Jetton: 100 tokens, each 0.5 TON → jetton value = 100 * 0.5 * 4 = 200 USD
+      // total_portfolio_value_usd should be 200 + 200 = 400 USD (NOT just 200 from TON alone)
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "50" }),
+          getPrice: async () => ({ usd: 4 }),
+          getJettonBalances: async () => [
+            { jettonAddress: "EQJettonB", balanceFormatted: "100", balance: "100" },
+          ],
+          dex: {
+            quote: async (params) => {
+              if (params.fromAsset === "EQJettonB" && params.toAsset === "TON") {
+                return { stonfi: { output: "0.5", price: "0.5" }, recommended: "stonfi" };
+              }
+              return { stonfi: { output: "1", price: "1" }, recommended: "stonfi" };
+            },
+            quoteSTONfi: async () => ({ output: "1", price: "1" }),
+            quoteDeDust: async () => ({ output: "1", price: "1" }),
+            swap: async () => ({ expectedOutput: "1", dex: "stonfi" }),
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_rebalance_portfolio");
+      const result = await tool.execute(
+        {
+          target_allocations: [
+            { asset: "TON", percent: 50 },
+            { asset: "EQJettonB", percent: 50 },
+          ],
+          mode: "real",
+        },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // TON: 50 * 4 = 200; Jetton: 100 * 0.5 * 4 = 200 → total = 400
+      assert.ok(
+        result.data.total_portfolio_value_usd >= 380,
+        `total_portfolio_value_usd should include jetton value (~400), got ${result.data.total_portfolio_value_usd}`
+      );
+      assert.ok("ton_balance_usd" in result.data,
+        "Response should expose ton_balance_usd separately");
+      assert.ok("jetton_holdings_usd" in result.data,
+        "Response should expose jetton_holdings_usd separately");
+      // Verify target values are derived from the full portfolio, not just TON
+      const tonEntry = result.data.rebalancing_plan.find((p) => p.asset === "TON");
+      assert.ok(
+        tonEntry.target_value_usd >= 180,
+        `Target value for TON (50% of ~400) should be ~200, got ${tonEntry.target_value_usd}`
       );
     });
   });

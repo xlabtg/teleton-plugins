@@ -1884,13 +1884,24 @@ export const tools = (sdk) => [
             trailingStopPrice = effectivePeak * (1 - rule.trailing_stop_percent / 100);
           }
 
-          const stopLossPrice = trailingStopPrice ?? rule.entry_price * (1 - rule.stop_loss_percent / 100);
+          // The plain stop-loss level is always based on entry price, regardless of trailing.
+          const plainStopLossPrice = rule.entry_price * (1 - rule.stop_loss_percent / 100);
           const takeProfitPrice = rule.take_profit_percent != null
             ? rule.entry_price * (1 + rule.take_profit_percent / 100)
             : null;
 
-          const stopLossHit = current_price <= stopLossPrice;
-          const takeProfitHit = takeProfitPrice != null && current_price >= takeProfitPrice;
+          // When trailing stop is active the effective stop price is the trailing floor
+          // (used for the annotated stop_loss_price field), but the exit is classified as
+          // "take_profit" because the trade is being closed to lock in profits, not a loss.
+          const stopLossPrice = trailingStopPrice ?? plainStopLossPrice;
+
+          // Plain stop-loss fires only when price drops below the entry-based floor.
+          const stopLossHit = current_price <= plainStopLossPrice;
+          // For trailing stops: take_profit fires when price pulls back below the trailing floor.
+          // For plain rules:    take_profit fires when price reaches the static target.
+          const takeProfitHit = rule.trailing_stop
+            ? trailingStopPrice != null && current_price <= trailingStopPrice && !stopLossHit
+            : takeProfitPrice != null && current_price >= takeProfitPrice;
 
           const annotated = {
             rule_id: rule.id,
@@ -2708,7 +2719,7 @@ export const tools = (sdk) => [
         const tonPrice = await sdk.ton.getPrice().catch(() => null);
         const tonPriceUsd = tonPrice?.usd ?? 1;
 
-        const totalValueUsd = totalBalance * tonPriceUsd;
+        const tonBalanceUsd = totalBalance * tonPriceUsd;
 
         // Fetch current jetton holdings for real mode
         let jettonHoldings = [];
@@ -2745,6 +2756,13 @@ export const tools = (sdk) => [
           }
         }
 
+        // Total portfolio USD = TON holdings + all priced jetton holdings
+        const jettonTotalUsd = Object.values(jettonPricesUsd).reduce(
+          (sum, j) => sum + j.valueUsd,
+          0
+        );
+        const totalValueUsd = tonBalanceUsd + jettonTotalUsd;
+
         const rebalancingPlan = target_allocations.map((target) => {
           const targetValueUsd = totalValueUsd * (target.percent / 100);
           let currentValueUsd = 0;
@@ -2780,7 +2798,9 @@ export const tools = (sdk) => [
           data: {
             mode,
             total_portfolio_value_usd: parseFloat(totalValueUsd.toFixed(2)),
-            total_balance_ton: parseFloat(totalBalance.toFixed(4)),
+            ton_balance: parseFloat(totalBalance.toFixed(4)),
+            ton_balance_usd: parseFloat(tonBalanceUsd.toFixed(2)),
+            jetton_holdings_usd: parseFloat(jettonTotalUsd.toFixed(2)),
             ton_price_usd: tonPriceUsd,
             rebalancing_plan: rebalancingPlan,
             actions_required: actions.length,
