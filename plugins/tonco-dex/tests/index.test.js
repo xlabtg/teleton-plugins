@@ -264,6 +264,38 @@ describe("tonco-dex plugin", () => {
     });
   });
 
+  // ── P3: pool_address must be normalized to raw format ────────────────────
+  // The TONCO indexer's Address.parseRaw() crashes on bounceable (EQ.../UQ...)
+  // addresses. The plugin must convert any user-supplied address to 0:hex raw
+  // format before passing it to the GraphQL query.
+
+  describe("P3 fix: tonco_get_pool_stats normalizes pool_address to raw format", () => {
+    it("has required parameter: pool_address", () => {
+      const tool = mod.tools(makeSdk()).find((t) => t.name === "tonco_get_pool_stats");
+      assert.ok(
+        tool.parameters.required?.includes("pool_address"),
+        "pool_address must be required"
+      );
+    });
+
+    it("plugin source contains normalizeToRaw helper that handles EQ… addresses", async () => {
+      // Verify the source code uses normalizeToRaw() in tonco_get_pool_stats so
+      // bounceable addresses (EQ…/UQ…) are converted to 0:hex before the GraphQL call.
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const src = readFileSync(resolve("plugins/tonco-dex/index.js"), "utf8");
+
+      assert.ok(
+        src.includes("function normalizeToRaw"),
+        "P3: normalizeToRaw helper must be defined"
+      );
+      assert.ok(
+        src.includes("normalizeToRaw(params.pool_address)"),
+        "P3: tonco_get_pool_stats must call normalizeToRaw on pool_address"
+      );
+    });
+  });
+
   describe("tonco_get_token_info parameter validation", () => {
     let tool;
     before(() => {

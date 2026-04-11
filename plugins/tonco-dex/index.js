@@ -61,6 +61,31 @@ const TON_RAW_ADDR = "0:00000000000000000000000000000000000000000000000000000000
 let _sdk = null;
 
 // ---------------------------------------------------------------------------
+// Address helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize any valid TON address to raw format (0:xxxx…hex) required by
+ * the TONCO GraphQL indexer.  The indexer's server-side resolver calls
+ * Address.parseRaw() internally, which crashes with "The first argument must
+ * be of type string…" when it receives a bounceable/user-friendly address
+ * (EQ…/UQ…) instead of the raw 0:hex form.
+ *
+ * @param {string} addr - Any TON address (EQ…, UQ…, or 0:hex)
+ * @returns {string} Raw address in "0:xxxx…" form, or the original string
+ *                   if parsing fails (the indexer will then return its own error)
+ */
+function normalizeToRaw(addr) {
+  if (!addr) return addr;
+  try {
+    const parsed = Address.parse(addr.trim());
+    return `0:${parsed.hash.toString("hex")}`;
+  } catch {
+    return addr.trim();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GraphQL helper
 // ---------------------------------------------------------------------------
 
@@ -340,7 +365,7 @@ const toncoGetPoolStats = {
 
   execute: async (params) => {
     try {
-      const poolAddr = params.pool_address.trim();
+      const poolAddr = normalizeToRaw(params.pool_address);
 
       const query = `
         query GetPool($where: PoolWhere) {
@@ -625,8 +650,8 @@ const toncoSwapQuote = {
       const isTonIn = tokenInAddr.toUpperCase() === "TON";
       const isTonOut = tokenOutAddr.toUpperCase() === "TON";
 
-      const resolvedInAddr = isTonIn ? TON_RAW_ADDR : tokenInAddr;
-      const resolvedOutAddr = isTonOut ? TON_RAW_ADDR : tokenOutAddr;
+      const resolvedInAddr = isTonIn ? TON_RAW_ADDR : normalizeToRaw(tokenInAddr);
+      const resolvedOutAddr = isTonOut ? TON_RAW_ADDR : normalizeToRaw(tokenOutAddr);
 
       // Fetch pool data for this pair from indexer.
       // We query both orderings (jetton0/jetton1 vs jetton1/jetton0) because the indexer
@@ -834,8 +859,8 @@ const toncoExecuteSwap = {
       const isTonOut = tokenOutAddr.toUpperCase() === "TON";
 
       // Use the same TON_RAW_ADDR constant as tonco_swap_quote for consistent address resolution
-      const resolvedInAddr = isTonIn ? TON_RAW_ADDR : tokenInAddr;
-      const resolvedOutAddr = isTonOut ? TON_RAW_ADDR : tokenOutAddr;
+      const resolvedInAddr = isTonIn ? TON_RAW_ADDR : normalizeToRaw(tokenInAddr);
+      const resolvedOutAddr = isTonOut ? TON_RAW_ADDR : normalizeToRaw(tokenOutAddr);
 
       // Fetch pool from indexer
       const query = `
@@ -1076,7 +1101,7 @@ const toncoGetPositions = {
 
       const where = {
         owner: ownerAddr,
-        ...(params.pool_address ? { pool: params.pool_address.trim() } : {}),
+        ...(params.pool_address ? { pool: normalizeToRaw(params.pool_address) } : {}),
       };
 
       // NOTE: orderDirection is broken server-side; fetch more and sort client-side.
@@ -1220,7 +1245,7 @@ const toncoGetPositionFees = {
       const { liquidity, tickLow, tickHigh, feeGrowthInside0LastX128, feeGrowthInside1LastX128 } = positionInfo;
 
       // Get pool address from indexer if not provided
-      let poolAddress = params.pool_address?.trim();
+      let poolAddress = params.pool_address ? normalizeToRaw(params.pool_address) : undefined;
       if (!poolAddress) {
         const nftData = await positionContract.getData();
         const collectionAddr = nftData?.collection?.toString();
