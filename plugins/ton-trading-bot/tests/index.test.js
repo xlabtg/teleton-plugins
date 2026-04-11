@@ -1537,7 +1537,7 @@ describe("ton-trading-bot plugin", () => {
       // 13 TON → USDT trade; entry_price_usd=1.33 (TON at open), exit_price_usd=1.34 (TON rose slightly)
       // Both prices refer to from_asset (TON) per the corrected semantics.
       // pnl_usd = amount_in * (exit_price - entry_price) = 13 * (1.34 - 1.33) = 13 * 0.01 = 0.13 USD
-      // credit_ton = amount_in + pnl_usd / entry_price_usd = 13 + 0.13/1.33 ≈ 13.098
+      // credit_ton = amount_in + pnl_usd / exit_price_usd = 13 + 0.13/1.34 ≈ 13.097
       const openTrade = {
         id: 100,
         mode: "simulation",
@@ -1575,7 +1575,7 @@ describe("ton-trading-bot plugin", () => {
       );
       assert.equal(result.success, true);
       assert.ok(savedBalance !== null, "simulation balance should be updated on close");
-      // Expected: 50 (prev balance) + 13 (principal) + 0.13/1.33 ≈ 63.098
+      // Expected: 50 (prev balance) + 13 (principal) + 0.13/1.34 ≈ 63.097
       assert.ok(savedBalance > 63, `balance should be restored to ~63+, got ${savedBalance}`);
       assert.ok(savedBalance < 64, `balance should be around 63, got ${savedBalance}`);
     });
@@ -1663,7 +1663,7 @@ describe("ton-trading-bot plugin", () => {
       // 10 TON → USDT at $2/TON (entry), TON dropped to $1.5 at exit → loss
       // exit_price_usd = 1.5 (TON exit price, from_asset price at close)
       // usdOut = 10 * 1.5 = 15, usdIn = 10 * 2 = 20, pnl = -5 USD
-      // credit_ton = 10 + (-5/2) = 10 - 2.5 = 7.5 TON
+      // credit_ton = 10 + (-5/1.5) = 10 - 3.333 = 6.667 TON (uses exit_price for conversion)
       const openTrade = {
         id: 103,
         mode: "simulation",
@@ -1701,8 +1701,76 @@ describe("ton-trading-bot plugin", () => {
       );
       assert.equal(result.success, true);
       assert.equal(result.data.profit_or_loss, "loss");
-      // credit_ton = 7.5, new balance = 90 + 7.5 = 97.5
-      assert.ok(Math.abs(savedBalance - 97.5) < 0.0001, `expected 97.5, got ${savedBalance}`);
+      // credit_ton = 10 + (-5/1.5) = 10 - 3.333 = 6.667, new balance = 90 + 6.667 = 96.667
+      const expectedBalance = 90 + 10 + (-5 / 1.5); // 96.667
+      assert.ok(Math.abs(savedBalance - expectedBalance) < 0.0001, `expected ${expectedBalance}, got ${savedBalance}`);
+    });
+
+    it("credits back correct profit for large price move (issue #133): uses exit_price not entry_price", async () => {
+      // Issue #133: 15 TON trade at entry $1.26, TON rises to $1.393 (+10.6%)
+      // Expected profit in sim balance: ~1.43 TON (pnl converted at exit price)
+      // Buggy behaviour: used entry_price for conversion → profit = 1.583 TON (over-credited by 10.6%)
+      //
+      // pnl_usd = 15 * (1.393 - 1.26) = 15 * 0.133 = 1.995 USD
+      // credit_ton (correct, exit price): 15 + 1.995/1.393 = 16.432 TON  → profit = 1.432 TON ≈ 1.43
+      // credit_ton (buggy, entry price): 15 + 1.995/1.26  = 16.583 TON  → profit = 1.583 TON (too high)
+      const openTrade = {
+        id: 133,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "EQUsdtAddress",
+        amount_in: 15,
+        entry_price_usd: 1.26,
+        amount_out: null,
+        status: "open",
+      };
+      let savedBalance = null;
+      const sdk = {
+        ...makeSdk({ dbRows: { trade: openTrade, simBalance: { balance: 1000 } } }),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 1000 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+        log: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const result = await tool.execute(
+        { trade_id: 133, amount_out: 20.895, exit_price_usd: 1.393 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // pnl = 15 * 1.393 - 15 * 1.26 = 1.995 USD
+      assert.ok(Math.abs(result.data.pnl - 1.995) < 0.001, `pnl should be ~1.995, got ${result.data.pnl}`);
+
+      // Correct: credit uses exit_price ($1.393) → balance = 1000 + 15 + 1.995/1.393 = 1016.432
+      const pnlUsd = 15 * (1.393 - 1.26);
+      const expectedCredit = 15 + pnlUsd / 1.393;   // = 16.432 (uses exit price)
+      const buggyCredit    = 15 + pnlUsd / 1.26;    // = 16.583 (uses entry price — old bug)
+      const expectedBalance = 1000 + expectedCredit; // = 1016.432
+      const expectedProfit  = expectedCredit - 15;   // = 1.432 TON ≈ expected "~1.43 TON"
+
+      assert.ok(savedBalance !== null, "simulation balance should be updated on close");
+      assert.ok(
+        Math.abs(savedBalance - expectedBalance) < 0.001,
+        `balance should be ~${expectedBalance.toFixed(3)} (profit ~${expectedProfit.toFixed(3)} TON), got ${savedBalance}`
+      );
+      // Verify it is NOT the over-credited (buggy) value
+      const buggyBalance = 1000 + buggyCredit;
+      assert.ok(
+        Math.abs(savedBalance - buggyBalance) > 0.05,
+        `balance must NOT be the over-credited buggy value ~${buggyBalance.toFixed(3)}, got ${savedBalance}`
+      );
     });
   });
 
