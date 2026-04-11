@@ -366,6 +366,9 @@ const toncoGetPoolStats = {
 
   execute: async (params) => {
     try {
+      if (!params.pool_address) {
+        return { success: false, error: "pool_address parameter is required" };
+      }
       const poolAddr = normalizeToRaw(params.pool_address);
 
       const query = `
@@ -1063,6 +1066,10 @@ const toncoGetPositions = {
       const includeClosed = params.include_closed ?? false;
       const limit = params.limit ?? 20;
 
+      // NOTE: The TONCO indexer's Position.pool field is a String! (raw pool address),
+      // NOT an embedded object — querying subfields on it causes a GraphQL validation
+      // error: "Field 'pool' must not have a selection since type 'String!' has no
+      // subfields."  Token info (jetton0/jetton1) is available directly on Position.
       const query = `
         query GetPositions($where: PositionWhere, $filter: Filter) {
           positions(where: $where, filter: $filter) {
@@ -1085,17 +1092,9 @@ const toncoGetPositions = {
             feeGrowthInside1LastX128
             creationTime
             closingTime
-            pool {
-              address
-              version
-              fee
-              tick
-              tickSpacing
-              priceSqrt
-              liquidity
-              jetton0 { address symbol decimals }
-              jetton1 { address symbol decimals }
-            }
+            pool
+            jetton0 { address symbol decimals }
+            jetton1 { address symbol decimals }
           }
         }
       `;
@@ -1113,8 +1112,13 @@ const toncoGetPositions = {
 
       let positions = data.positions ?? [];
 
-      // Sort by creation time descending client-side
-      positions.sort((a, b) => (b.creationTime ?? 0) - (a.creationTime ?? 0));
+      // Sort by creation time descending client-side.
+      // creationTime is returned as an ISO date string by the indexer.
+      positions.sort((a, b) => {
+        const ta = a.creationTime ? new Date(a.creationTime).getTime() : 0;
+        const tb = b.creationTime ? new Date(b.creationTime).getTime() : 0;
+        return tb - ta;
+      });
 
       // Filter closed positions if not requested
       if (!includeClosed) {
@@ -1126,25 +1130,61 @@ const toncoGetPositions = {
       // Apply limit
       positions = positions.slice(0, limit);
 
+      // Fetch pool-level data (tick, version, fee, tickSpacing) for in-range calculation.
+      // The indexer's Position type only carries a pool address string, so we need a
+      // separate pools query.  Deduplicate pool addresses first.
+      const uniquePoolAddrs = [...new Set(positions.map((p) => p.pool).filter(Boolean))];
+      let poolInfoMap = {};
+      if (uniquePoolAddrs.length > 0) {
+        try {
+          const poolQuery = `
+            query GetPoolsForPositions($where: PoolWhere, $filter: Filter) {
+              pools(where: $where, filter: $filter) {
+                address
+                version
+                fee
+                tick
+                tickSpacing
+              }
+            }
+          `;
+          // NOTE: The indexer does not support an IN filter for addresses, so we
+          // request a broader set and filter client-side.  We use a large first
+          // value and rely on the caller having a small number of distinct pools.
+          const poolData = await gqlQuery(poolQuery, {
+            where: { isInitialized: true },
+            filter: { first: 400 },
+          });
+          for (const pool of poolData.pools ?? []) {
+            poolInfoMap[pool.address] = pool;
+          }
+        } catch {
+          // Pool info unavailable — in-range calculation will fall back to null
+        }
+      }
+
       const result = positions.map((p) => {
-        const pool = p.pool ?? {};
-        const dec0 = pool.jetton0?.decimals ?? 9;
-        const dec1 = pool.jetton1?.decimals ?? 9;
+        const poolAddr = p.pool;
+        const poolInfo = poolInfoMap[poolAddr] ?? {};
+        const dec0 = p.jetton0?.decimals ?? 9;
+        const dec1 = p.jetton1?.decimals ?? 9;
         const liq = p.liquidity ? BigInt(p.liquidity) : 0n;
         const isActive = liq > 0n;
-        const tickCurrent = pool.tick ?? 0;
-        const inRange = p.tickLower <= tickCurrent && tickCurrent < p.tickUpper;
+        const tickCurrent = poolInfo.tick ?? null;
+        const inRange = tickCurrent !== null
+          ? p.tickLower <= tickCurrent && tickCurrent < p.tickUpper
+          : null;
 
         return {
           id: p.id,
           nft_address: p.nftAddress,
-          status: isActive ? (inRange ? "in-range" : "out-of-range") : "closed",
+          status: isActive ? (inRange === null ? "active" : inRange ? "in-range" : "out-of-range") : "closed",
           pool: {
-            address: pool.address,
-            version: pool.version,
-            fee_tier: pool.fee ? `${(pool.fee / 10000).toFixed(2)}%` : null,
-            token0_symbol: pool.jetton0?.symbol,
-            token1_symbol: pool.jetton1?.symbol,
+            address: poolAddr,
+            version: poolInfo.version ?? null,
+            fee_tier: poolInfo.fee ? `${(poolInfo.fee / 10000).toFixed(2)}%` : null,
+            token0_symbol: p.jetton0?.symbol,
+            token1_symbol: p.jetton1?.symbol,
           },
           tick_lower: p.tickLower,
           tick_upper: p.tickUpper,
@@ -1153,9 +1193,9 @@ const toncoGetPositions = {
           liquidity: p.liquidity,
           current_amounts: {
             token0: p.amount0 ? formatAmount(p.amount0, dec0) : null,
-            token0_symbol: pool.jetton0?.symbol,
+            token0_symbol: p.jetton0?.symbol,
             token1: p.amount1 ? formatAmount(p.amount1, dec1) : null,
-            token1_symbol: pool.jetton1?.symbol,
+            token1_symbol: p.jetton1?.symbol,
           },
           deposited: {
             token0: p.depositedJetton0 ? formatAmount(p.depositedJetton0, dec0) : null,
@@ -1167,12 +1207,13 @@ const toncoGetPositions = {
           },
           fees_collected: {
             token0: p.collectedFeesJetton0 ? formatAmount(p.collectedFeesJetton0, dec0) : null,
-            token0_symbol: pool.jetton0?.symbol,
+            token0_symbol: p.jetton0?.symbol,
             token1: p.collectedFeesJetton1 ? formatAmount(p.collectedFeesJetton1, dec1) : null,
-            token1_symbol: pool.jetton1?.symbol,
+            token1_symbol: p.jetton1?.symbol,
           },
-          created_at: p.creationTime ? new Date(p.creationTime * 1000).toISOString() : null,
-          closed_at: p.closingTime ? new Date(p.closingTime * 1000).toISOString() : null,
+          // creationTime is returned as an ISO date string by the indexer
+          created_at: p.creationTime ?? null,
+          closed_at: p.closingTime ?? null,
         };
       });
 
