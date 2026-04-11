@@ -431,6 +431,109 @@ describe("tonco-dex plugin", () => {
     });
   });
 
+  // ── Bug #141 fix: tonco_get_pool_stats missing pool_address ─────────────────
+  // Previously, when pool_address was undefined/not-passed, normalizeToRaw()
+  // returned undefined, JSON.stringify dropped the field, and the indexer returned
+  // ALL pools (silent wrong-result bug).  Fix: explicit early-return check.
+
+  describe("Bug #141 fix: tonco_get_pool_stats validates pool_address", () => {
+    let tool;
+    before(() => {
+      tool = mod.tools(makeSdk()).find((t) => t.name === "tonco_get_pool_stats");
+    });
+
+    it("returns error when pool_address is missing (undefined)", async () => {
+      const result = await tool.execute({});
+      assert.equal(result.success, false, "must fail when pool_address is missing");
+      assert.ok(result.error, "must have error message");
+      assert.ok(
+        result.error.toLowerCase().includes("pool_address") ||
+        result.error.toLowerCase().includes("required"),
+        `error should mention pool_address or required, got: ${result.error}`
+      );
+    });
+
+    it("returns error when pool_address is empty string", async () => {
+      const result = await tool.execute({ pool_address: "" });
+      assert.equal(result.success, false, "must fail when pool_address is empty string");
+      assert.ok(result.error, "must have error message");
+    });
+
+    it("does not silently return wrong pool when pool_address is missing (source-level check)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const src = readFileSync(resolve("plugins/tonco-dex/index.js"), "utf8");
+      // The fix adds an explicit check before normalizeToRaw in tonco_get_pool_stats
+      assert.ok(
+        src.includes("if (!params.pool_address)"),
+        "Bug #141: tonco_get_pool_stats must validate pool_address before normalizeToRaw"
+      );
+    });
+  });
+
+  // ── Bug #141 fix: tonco_get_positions GraphQL query ─────────────────────────
+  // The TONCO indexer's Position.pool is a String! (pool address), NOT an object.
+  // The old query selected subfields on it: pool { address version fee ... }
+  // causing: "Field 'pool' must not have a selection since type 'String!' has no subfields."
+  // Fix: query `pool` as a scalar and use Position's own jetton0/jetton1 fields.
+
+  describe("Bug #141 fix: tonco_get_positions uses correct GraphQL schema", () => {
+    it("positions query does not select subfields on pool (source-level check)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const src = readFileSync(resolve("plugins/tonco-dex/index.js"), "utf8");
+
+      // Find the GetPositions query in source
+      const queryStart = src.indexOf("query GetPositions");
+      assert.ok(queryStart !== -1, "GetPositions query must exist in source");
+      const queryEnd = src.indexOf("`;", queryStart);
+      const gqlQuery = src.slice(queryStart, queryEnd);
+
+      // pool must appear as a bare scalar field, not with { ... } subfields
+      assert.ok(
+        !gqlQuery.includes("pool {"),
+        "Bug #141: positions query must NOT select subfields on pool — pool is String! in the indexer schema"
+      );
+    });
+
+    it("positions query selects jetton0 and jetton1 directly on Position (source-level check)", async () => {
+      const { readFileSync } = await import("node:fs");
+      const { resolve } = await import("node:path");
+      const src = readFileSync(resolve("plugins/tonco-dex/index.js"), "utf8");
+
+      const queryStart = src.indexOf("query GetPositions");
+      const queryEnd = src.indexOf("`;", queryStart);
+      const gqlQuery = src.slice(queryStart, queryEnd);
+
+      // Position has jetton0/jetton1 as direct fields (not nested under pool)
+      assert.ok(
+        gqlQuery.includes("jetton0 {") || gqlQuery.includes("jetton0{"),
+        "Bug #141: positions query must select jetton0 directly on Position, not via pool"
+      );
+      assert.ok(
+        gqlQuery.includes("jetton1 {") || gqlQuery.includes("jetton1{"),
+        "Bug #141: positions query must select jetton1 directly on Position, not via pool"
+      );
+    });
+
+    it("tonco_get_positions returns object with success field (does not throw)", async () => {
+      const tool = mod.tools(makeSdk()).find((t) => t.name === "tonco_get_positions");
+      const result = await tool.execute({
+        owner_address: "EQDemo_AddressForTesting",
+      });
+      assert.ok(typeof result === "object", "must return an object");
+      assert.ok("success" in result, "must have success field");
+      // Must NOT return a GraphQL validation error about pool subfields
+      if (!result.success) {
+        assert.ok(
+          !result.error?.includes("must not have a selection") &&
+          !result.error?.includes("has no subfields"),
+          `Bug #141: must not get GraphQL schema error, got: ${result.error}`
+        );
+      }
+    });
+  });
+
   // ── Live integration tests (skipped by default) ───────────────────────────
 
   describe("live integration tests (TONCO_TEST_LIVE=1 to enable)", { skip: !LIVE }, () => {
