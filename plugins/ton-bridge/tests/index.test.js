@@ -43,6 +43,12 @@ function makeContext(overrides = {}) {
   };
 }
 
+function makeCircularContext(overrides = {}) {
+  const context = makeContext(overrides);
+  context.client = { context };
+  return context;
+}
+
 // ─── Load plugin once ─────────────────────────────────────────────────────────
 
 let mod;
@@ -116,25 +122,54 @@ describe("ton-bridge plugin", () => {
 
   describe("ton_bridge_open", () => {
     it("returns success when sendMessage succeeds", async () => {
-      let capturedChatId, capturedText, capturedOpts;
+      let capturedChatId, capturedText;
       const sdk = makeSdk({
         telegram: {
-          sendMessage: async (chatId, text, opts) => {
+          sendMessage: async (chatId, text) => {
             capturedChatId = chatId;
             capturedText = text;
-            capturedOpts = opts;
             return 55;
           },
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      const result = await tool.execute({}, makeContext({ chatId: 111 }));
+      const result = await tool.execute(
+        { chatId: "111" },
+        makeContext({ chatId: 222 })
+      );
 
       assert.equal(result.success, true);
       assert.equal(result.data.message_id, 55);
-      assert.equal(result.data.chat_id, 111);
-      assert.equal(capturedChatId, 111);
+      assert.equal(result.data.chat_id, "111");
+      assert.equal(capturedChatId, "111");
       assert.ok(capturedText, "message text should be provided");
+    });
+
+    it("requires chatId parameter in schema", () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
+      assert.ok(tool.parameters?.required?.includes("chatId"), "chatId should be required");
+    });
+
+    it("uses explicit chatId param and does not serialize circular context", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 55;
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
+      const result = await tool.execute(
+        { chatId: "chat-123" },
+        makeCircularContext({ chatId: undefined })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "chat-123");
+      assert.equal(capturedChatId, "chat-123");
     });
 
     it("uses custom message when provided", async () => {
@@ -148,7 +183,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({ message: "Custom text" }, makeContext());
+      await tool.execute({ chatId: "123456789", message: "Custom text" }, makeContext());
       assert.ok(capturedText.startsWith("Custom text"), "message should start with custom text");
     });
 
@@ -163,7 +198,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({ buttonText: "Open Bridge" }, makeContext());
+      await tool.execute({ chatId: "123456789", buttonText: "Open Bridge" }, makeContext());
       assert.ok(
         capturedOpts?.inlineKeyboard?.[0]?.[0]?.text === "Open Bridge",
         "inline keyboard button should have custom button text"
@@ -182,7 +217,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.ok(
         capturedOpts?.inlineKeyboard?.[0]?.[0]?.text === "My Bridge Button",
         "inline keyboard button should have config button text"
@@ -200,7 +235,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.ok(capturedOpts, "opts should be passed to sendMessage");
       assert.ok(capturedOpts.inlineKeyboard, "opts should have inlineKeyboard");
       assert.ok(Array.isArray(capturedOpts.inlineKeyboard), "inlineKeyboard should be an array");
@@ -217,25 +252,25 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      const result = await tool.execute({}, makeContext());
+      const result = await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(result.success, false);
       assert.ok(result.error);
     });
 
-    it("returns failure when context.chatId is undefined", async () => {
+    it("returns failure when chatId param is missing", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      const result = await tool.execute({}, makeContext({ chatId: undefined }));
+      const result = await tool.execute({}, makeContext({ chatId: 111 }));
       assert.equal(result.success, false);
-      assert.ok(result.error, "should return an error message");
+      assert.equal(result.error, "chatId is required");
     });
 
-    it("returns failure when context is undefined", async () => {
+    it("returns success when context is undefined and chatId param is provided", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      const result = await tool.execute({}, undefined);
-      assert.equal(result.success, false);
-      assert.ok(result.error, "should return an error message");
+      const result = await tool.execute({ chatId: "123456789" }, undefined);
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "123456789");
     });
   });
 
@@ -243,9 +278,37 @@ describe("ton-bridge plugin", () => {
     it("returns success when sendMessage succeeds", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
-      const result = await tool.execute({}, makeContext());
+      const result = await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(result.success, true);
       assert.ok(result.data.message_id != null);
+      assert.equal(result.data.chat_id, "123456789");
+    });
+
+    it("requires chatId parameter in schema", () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
+      assert.ok(tool.parameters?.required?.includes("chatId"), "chatId should be required");
+    });
+
+    it("uses explicit chatId param and does not serialize circular context", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 66;
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
+      const result = await tool.execute(
+        { chatId: "chat-456" },
+        makeCircularContext({ chatId: undefined })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "chat-456");
+      assert.equal(capturedChatId, "chat-456");
     });
 
     it("message contains TON Bridge info", async () => {
@@ -259,7 +322,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.ok(capturedText.toLowerCase().includes("bridge"), "about message should mention bridge");
     });
 
@@ -274,7 +337,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.ok(capturedOpts?.inlineKeyboard, "opts should have inlineKeyboard");
       const button = capturedOpts.inlineKeyboard[0][0];
       assert.ok(button.url, "button should have a url property");
@@ -288,16 +351,16 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
-      const result = await tool.execute({}, makeContext());
+      const result = await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(result.success, false);
     });
 
-    it("returns failure when context.chatId is undefined", async () => {
+    it("returns failure when chatId param is missing", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
-      const result = await tool.execute({}, makeContext({ chatId: undefined }));
+      const result = await tool.execute({}, makeContext({ chatId: 111 }));
       assert.equal(result.success, false);
-      assert.ok(result.error, "should return an error message");
+      assert.equal(result.error, "chatId is required");
     });
   });
 
@@ -314,7 +377,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      await tool.execute({ customMessage: "Hello TON!" }, makeContext());
+      await tool.execute({ chatId: "123456789", customMessage: "Hello TON!" }, makeContext());
       assert.ok(capturedText.startsWith("Hello TON!"), "message should start with custom message");
       assert.ok(capturedOpts?.inlineKeyboard?.[0]?.[0]?.url?.includes("TONBridge_robot"), "inline keyboard button url should include Mini App link");
     });
@@ -322,10 +385,34 @@ describe("ton-bridge plugin", () => {
     it("returns success with message_id and chat_id", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      const result = await tool.execute({ customMessage: "Bridge now" }, makeContext({ chatId: 999 }));
+      const result = await tool.execute(
+        { chatId: "999", customMessage: "Bridge now" },
+        makeContext({ chatId: undefined })
+      );
       assert.equal(result.success, true);
-      assert.equal(result.data.chat_id, 999);
+      assert.equal(result.data.chat_id, "999");
       assert.equal(result.data.message_id, 42);
+    });
+
+    it("uses explicit chatId param and does not serialize circular context", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 77;
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
+      const result = await tool.execute(
+        { chatId: "chat-789", customMessage: "Bridge now" },
+        makeCircularContext({ chatId: undefined })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "chat-789");
+      assert.equal(capturedChatId, "chat-789");
     });
 
     it("returns failure when sendMessage throws", async () => {
@@ -335,22 +422,23 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      const result = await tool.execute({ customMessage: "test" }, makeContext());
+      const result = await tool.execute({ chatId: "123456789", customMessage: "test" }, makeContext());
       assert.equal(result.success, false);
       assert.ok(result.error);
     });
 
-    it("returns failure when context.chatId is undefined", async () => {
+    it("returns failure when chatId param is missing", async () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
       const result = await tool.execute({ customMessage: "test" }, makeContext({ chatId: undefined }));
       assert.equal(result.success, false);
-      assert.ok(result.error, "should return an error message");
+      assert.equal(result.error, "chatId is required");
     });
 
-    it("uses customMessage parameter as required", () => {
+    it("uses chatId and customMessage parameters as required", () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
+      assert.ok(tool.parameters?.required?.includes("chatId"), "chatId should be required");
       assert.ok(tool.parameters?.required?.includes("customMessage"), "customMessage should be required");
     });
 
@@ -366,7 +454,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.ok(capturedText.startsWith("Config fallback message"), "message should start with config fallback");
     });
 
@@ -381,7 +469,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      const result = await tool.execute({}, makeContext());
+      const result = await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(result.success, true, "should succeed even without customMessage param");
       assert.ok(capturedText, "should send a non-empty fallback message");
       assert.ok(capturedText.toLowerCase().includes("bridge"), "fallback message should mention bridge");
@@ -401,7 +489,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(capturedOpts?.inlineKeyboard?.[0]?.[0]?.text, "🚀 TON Bridge", "button text should include emoji when configured");
     });
 
@@ -416,7 +504,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({ buttonText: "TON Bridge" }, makeContext());
+      await tool.execute({ chatId: "123456789", buttonText: "TON Bridge" }, makeContext());
       assert.equal(capturedOpts?.inlineKeyboard?.[0]?.[0]?.text, "TON Bridge", "button text should work without emoji");
     });
 
@@ -431,7 +519,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       assert.equal(capturedOpts.inlineKeyboard.length, 1, "should have one row");
       assert.equal(capturedOpts.inlineKeyboard[0].length, 1, "should have one button in the row");
     });
@@ -450,7 +538,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       const buttonUrl = capturedOpts?.inlineKeyboard?.[0]?.[0]?.url;
       assert.ok(buttonUrl?.includes("myref"), `button url should include startParam, got: ${buttonUrl}`);
     });
@@ -467,7 +555,7 @@ describe("ton-bridge plugin", () => {
         },
       });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
-      await tool.execute({}, makeContext());
+      await tool.execute({ chatId: "123456789" }, makeContext());
       const buttonUrl = capturedOpts?.inlineKeyboard?.[0]?.[0]?.url;
       assert.ok(buttonUrl?.includes("startapp"), `button url should include base URL ending with 'startapp'`);
       assert.ok(!buttonUrl?.includes("startapp="), `button url should not have startParam appended, got: ${buttonUrl}`);
