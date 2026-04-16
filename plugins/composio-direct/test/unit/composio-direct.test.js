@@ -5,7 +5,7 @@
  * (Node.js >= 18 built-in test runner)
  */
 
-import { describe, it, before, after, mock } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ function makeSdk({ apiKey = "test-api-key", config = {} } = {}) {
       },
     },
     config: {
-      base_url: "https://api.composio.dev/api/v1",
+      base_url: "https://backend.composio.dev/api/v3.1",
       timeout_ms: 5000,
       max_parallel_executions: 10,
       ...config,
@@ -431,8 +431,17 @@ describe("composio_multi_execute", () => {
 
 describe("composio_auth_link", () => {
   it("returns a valid auth link for a known service", async () => {
-    // Mock the initiate endpoint to fail so we test the fallback URL
-    const restore = mockFetch([{ status: 404, data: {} }]);
+    const restore = mockFetch([
+      { status: 200, data: { items: [] } },
+      { status: 201, data: { auth_config: { id: "ac_github" } } },
+      {
+        status: 201,
+        data: {
+          redirect_url: "https://connect.composio.dev/link/ln_github",
+          connected_account_id: "ca_github",
+        },
+      },
+    ]);
 
     try {
       const sdk = makeSdk();
@@ -441,8 +450,10 @@ describe("composio_auth_link", () => {
       const result = await authTool.execute({ service: "github" }, makeContext());
 
       assert.equal(result.success, true);
-      assert.ok(result.data.url?.includes("github"), `URL should reference github, got: ${result.data.url}`);
+      assert.equal(result.data.url, "https://connect.composio.dev/link/ln_github");
       assert.equal(result.data.service, "github");
+      assert.equal(result.data.auth_config_id, "ac_github");
+      assert.equal(result.data.connected_account_id, "ca_github");
       assert.ok(result.data.message?.includes("GITHUB"));
       assert.ok(result.data.hint);
     } finally {
@@ -450,11 +461,11 @@ describe("composio_auth_link", () => {
     }
   });
 
-  it("uses dynamic URL when API returns redirectUrl", async () => {
+  it("uses explicit auth_config_id when provided", async () => {
     const restore = mockFetch([
       {
-        status: 200,
-        data: { redirectUrl: "https://accounts.google.com/oauth2/auth?client_id=composio" },
+        status: 201,
+        data: { redirect_url: "https://connect.composio.dev/link/ln_gmail" },
       },
     ]);
 
@@ -462,10 +473,14 @@ describe("composio_auth_link", () => {
       const sdk = makeSdk();
       const toolList = toolsFactory(sdk);
       const authTool = toolList.find((t) => t.name === "composio_auth_link");
-      const result = await authTool.execute({ service: "gmail" }, makeContext());
+      const result = await authTool.execute(
+        { service: "gmail", auth_config_id: "ac_gmail" },
+        makeContext()
+      );
 
       assert.equal(result.success, true);
-      assert.ok(result.data.url?.includes("google.com"), `Expected Google OAuth URL, got: ${result.data.url}`);
+      assert.equal(result.data.url, "https://connect.composio.dev/link/ln_gmail");
+      assert.equal(result.data.auth_config_id, "ac_gmail");
     } finally {
       restore();
     }
@@ -492,7 +507,10 @@ describe("composio_auth_link", () => {
   });
 
   it("includes custom redirect message when provided", async () => {
-    const restore = mockFetch([{ status: 404, data: {} }]);
+    const restore = mockFetch([
+      { status: 200, data: { items: [{ id: "ac_slack" }] } },
+      { status: 201, data: { redirect_url: "https://connect.composio.dev/link/ln_slack" } },
+    ]);
 
     try {
       const sdk = makeSdk();

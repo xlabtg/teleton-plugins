@@ -28,7 +28,7 @@ function makeSdk({ apiKey = "test-key", config = {} } = {}) {
       },
     },
     config: {
-      base_url: "https://api.composio.dev/api/v1",
+      base_url: "https://backend.composio.dev/api/v3.1",
       timeout_ms: 3000,
       max_parallel_executions: 5,
       ...config,
@@ -147,11 +147,11 @@ describe("auth error flow", () => {
     }
   });
 
-  it("composio_auth_link falls back gracefully when initiate endpoint is unavailable", async () => {
+  it("composio_auth_link returns a clear error when auth APIs are unavailable", async () => {
     let callCount = 0;
     const restore = mockFetchFactory(async () => {
       callCount++;
-      // Simulate initiate endpoint being down
+      // Simulate Composio auth endpoints being down
       throw new Error("Network failure");
     });
 
@@ -161,10 +161,10 @@ describe("auth error flow", () => {
       const authTool = toolList.find((t) => t.name === "composio_auth_link");
       const result = await authTool.execute({ service: "notion" }, makeContext());
 
-      // Should succeed with fallback URL even when API is unreachable
-      assert.equal(result.success, true);
-      assert.ok(result.data.url?.includes("notion"));
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("Could not create Composio auth link"));
       assert.equal(result.data.service, "notion");
+      assert.equal(callCount, 3, "fetchWithRetry should retry network failures");
     } finally {
       restore();
     }
@@ -239,6 +239,7 @@ describe("multi-execute batching", () => {
         result.data.summary.succeeded + result.data.summary.failed + result.data.summary.skipped,
         3
       );
+      assert.equal(callCount, 1);
     } finally {
       restore();
     }

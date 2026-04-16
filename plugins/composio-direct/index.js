@@ -9,11 +9,11 @@
  *
  * Authentication:
  *   - Requires a Composio API key stored in sdk.secrets as "composio_api_key"
- *   - Set COMPOSIO_API_KEY env var or use the secrets store
+ *   - Set COMPOSIO_DIRECT_COMPOSIO_API_KEY, COMPOSIO_API_KEY, or use the secrets store
  *
  * SDK integration:
- *   - Uses the official @composio/core npm SDK (installed in plugin-local node_modules)
- *   - Falls back to direct HTTP calls if the SDK is unavailable
+ *   - Uses the official @composio/core npm SDK if it is available
+ *   - Uses direct HTTP calls against Composio v3.1 when the SDK is unavailable
  *
  * Security:
  *   - API keys and OAuth tokens are never logged
@@ -60,6 +60,10 @@ async function loadComposioSdk() {
  */
 const composioSdkCache = new Map();
 
+const DEFAULT_BASE_URL = "https://backend.composio.dev/api/v3.1";
+const DEFAULT_TOOL_VERSION = "latest";
+const DEFAULT_TOOLKIT_VERSIONS = "latest";
+
 /**
  * Get (or create) a Composio SDK instance for the given API key.
  * Returns null if the SDK is unavailable.
@@ -83,21 +87,24 @@ async function getComposioSdk(apiKey) {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.1.0",
+  version: "1.2.0",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
   secrets: {
     composio_api_key: {
       required: true,
-      env: "COMPOSIO_API_KEY",
+      env: "COMPOSIO_DIRECT_COMPOSIO_API_KEY",
       description: "Composio API key (create at https://app.composio.dev/settings)",
     },
   },
   defaultConfig: {
-    base_url: "https://api.composio.dev/api/v1",
+    base_url: DEFAULT_BASE_URL,
     timeout_ms: 30000,
     max_parallel_executions: 10,
+    tool_version: DEFAULT_TOOL_VERSION,
+    toolkit_versions: DEFAULT_TOOLKIT_VERSIONS,
+    auth_config_ids: {},
   },
 };
 
@@ -204,12 +211,16 @@ async function fetchWithRetry({ url, method, headers, body, timeoutMs, log }) {
  */
 function isAuthError(response) {
   if (response.status === 401 || response.status === 403) return true;
-  const data = response.data;
-  if (data && typeof data === "object") {
-    const msg = (data.message ?? data.error ?? "").toLowerCase();
-    if (msg.includes("auth") || msg.includes("connect") || msg.includes("not connected")) {
-      return true;
-    }
+  const msg = getComposioMessage(response.data).toLowerCase();
+  if (msg) {
+    return (
+      msg.includes("auth") ||
+      msg.includes("connect") ||
+      msg.includes("connection") ||
+      msg.includes("not connected") ||
+      msg.includes("no active account") ||
+      msg.includes("no connected account")
+    );
   }
   return false;
 }
@@ -220,7 +231,7 @@ function isAuthError(response) {
  * @returns {string}
  */
 function extractServiceFromSlug(toolSlug) {
-  return toolSlug.split("_")[0] ?? toolSlug;
+  return String(toolSlug).split("_")[0]?.toLowerCase() ?? String(toolSlug).toLowerCase();
 }
 
 /**
@@ -234,6 +245,131 @@ function formatApiError(err) {
   return String(err);
 }
 
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * @param {string} toolSlug
+ * @returns {string}
+ */
+function normalizeToolSlug(toolSlug) {
+  return String(toolSlug).trim().toUpperCase();
+}
+
+/**
+ * @param {string} toolkit
+ * @returns {string}
+ */
+function normalizeToolkitSlug(toolkit) {
+  return String(toolkit).trim().toLowerCase();
+}
+
+/**
+ * Resolve a stable Composio user id from Teleton tool context.
+ * Prefer senderId so connected accounts are per-user, not per-chat.
+ * @param {unknown} context
+ * @returns {string}
+ */
+function getUserId(context) {
+  if (isRecord(context)) {
+    const senderId = context.senderId ?? context.userId ?? context.chatId;
+    if (senderId !== undefined && senderId !== null && senderId !== "") {
+      return String(senderId);
+    }
+  }
+  return "teleton";
+}
+
+/**
+ * Extract a useful error message from Composio response shapes.
+ * @param {unknown} data
+ * @returns {string}
+ */
+function getComposioMessage(data) {
+  if (!isRecord(data)) return typeof data === "string" ? data : "";
+
+  if (typeof data.message === "string") return data.message;
+  if (typeof data.error === "string") return data.error;
+
+  if (isRecord(data.error)) {
+    const err = data.error;
+    const message = [err.message, err.suggested_fix]
+      .filter((part) => typeof part === "string" && part.length > 0)
+      .join(" ");
+    if (message) return message;
+    if (typeof err.slug === "string") return err.slug;
+  }
+
+  return "";
+}
+
+/**
+ * Convert Composio API/SDK tool objects into compact LLM-visible results.
+ * @param {Record<string, unknown>} item
+ * @param {boolean} includeParams
+ * @returns {Record<string, unknown>}
+ */
+function formatTool(item, includeParams) {
+  const toolkit = isRecord(item.toolkit)
+    ? (item.toolkit.slug ?? item.toolkit.name ?? "")
+    : (item.toolkit_slug ?? item.toolkit ?? item.appKey ?? item.app ?? "");
+  const slug = item.slug ?? item.name ?? item.id;
+  const authRequired =
+    item.no_auth === true
+      ? false
+      : (item.requiresAuth ?? item.auth_required ?? item.authRequired ?? true);
+
+  const tool = {
+    name: slug,
+    slug,
+    display_name: item.name ?? slug,
+    description: item.description ?? item.human_description ?? "",
+    toolkit,
+    auth_required: Boolean(authRequired),
+    version: item.version ?? null,
+    tags: item.tags ?? [],
+  };
+
+  if (includeParams) {
+    tool.parameters_schema =
+      item.input_parameters ??
+      item.inputParameters ??
+      item.parameters ??
+      item.schema ??
+      null;
+    tool.output_schema =
+      item.output_parameters ??
+      item.outputParameters ??
+      null;
+  }
+
+  return tool;
+}
+
+/**
+ * Preserve Composio's data payload while carrying useful metadata.
+ * @param {unknown} data
+ * @returns {unknown}
+ */
+function formatExecutionData(data) {
+  if (!isRecord(data)) return data;
+
+  const payload = data.data ?? data.response ?? data.result ?? data;
+  const meta = {};
+  if (data.log_id) meta.log_id = data.log_id;
+  if (data.session_info) meta.session_info = data.session_info;
+
+  if (isRecord(payload)) {
+    return Object.keys(meta).length > 0 ? { ...payload, ...meta } : payload;
+  }
+  return Object.keys(meta).length > 0 ? { result: payload, ...meta } : payload;
+}
+
 // ---------------------------------------------------------------------------
 // SDK export — Teleton runtime calls tools(sdk) and uses the returned array
 // ---------------------------------------------------------------------------
@@ -243,11 +379,16 @@ export const tools = (sdk) => {
    * Get plugin configuration with defaults.
    */
   function getConfig() {
-    const cfg = sdk.config ?? {};
+    const legacyConfig = isRecord(sdk.config) ? sdk.config : {};
+    const pluginConfig = isRecord(sdk.pluginConfig) ? sdk.pluginConfig : {};
+    const cfg = { ...legacyConfig, ...pluginConfig };
     return {
-      baseUrl: (cfg.base_url ?? "https://api.composio.dev/api/v1").replace(/\/$/, ""),
+      baseUrl: String(cfg.base_url ?? DEFAULT_BASE_URL).replace(/\/$/, ""),
       timeoutMs: Number(cfg.timeout_ms ?? 30000),
       maxParallelExecutions: Number(cfg.max_parallel_executions ?? 10),
+      toolVersion: String(cfg.tool_version ?? DEFAULT_TOOL_VERSION),
+      toolkitVersions: cfg.toolkit_versions ?? DEFAULT_TOOLKIT_VERSIONS,
+      authConfigIds: isRecord(cfg.auth_config_ids) ? cfg.auth_config_ids : {},
     };
   }
 
@@ -256,7 +397,13 @@ export const tools = (sdk) => {
    * @returns {string | null}
    */
   function getApiKey() {
-    return sdk.secrets?.get("composio_api_key") ?? null;
+    const fromSecrets = sdk.secrets?.get?.("composio_api_key");
+    if (typeof fromSecrets === "string" && fromSecrets.length > 0) return fromSecrets;
+    return (
+      process.env.COMPOSIO_DIRECT_COMPOSIO_API_KEY ??
+      process.env.COMPOSIO_API_KEY ??
+      null
+    );
   }
 
   /**
@@ -267,7 +414,108 @@ export const tools = (sdk) => {
     return {
       success: false,
       error:
-        "Composio API key is not configured. Please set the composio_api_key secret with your key from https://app.composio.dev/settings",
+        "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your key from https://app.composio.dev/settings",
+    };
+  }
+
+  /**
+   * Find or create a Composio-managed auth config and return a Connect Link.
+   *
+   * @param {object} opts
+   * @param {string} opts.apiKey
+   * @param {string} opts.service
+   * @param {string} opts.userId
+   * @param {string | undefined} [opts.authConfigId]
+   * @param {string | undefined} [opts.callbackUrl]
+   * @param {string | undefined} [opts.alias]
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async function createAuthLink({ apiKey, service, userId, authConfigId, callbackUrl, alias }) {
+    const { baseUrl, timeoutMs, authConfigIds } = getConfig();
+    const toolkit = normalizeToolkitSlug(service);
+    let resolvedAuthConfigId = authConfigId ?? authConfigIds[toolkit];
+
+    if (!resolvedAuthConfigId) {
+      const qs = new URLSearchParams({
+        toolkit_slug: toolkit,
+        is_composio_managed: "true",
+        limit: "1",
+      });
+      const listResponse = await fetchWithRetry({
+        url: `${baseUrl}/auth_configs?${qs.toString()}`,
+        method: "GET",
+        headers: buildHeaders(apiKey),
+        timeoutMs,
+        log: sdk.log,
+      });
+
+      if (listResponse.status === 200) {
+        const items = Array.isArray(listResponse.data?.items) ? listResponse.data.items : [];
+        resolvedAuthConfigId = items[0]?.id ?? items[0]?.auth_config?.id;
+      }
+    }
+
+    if (!resolvedAuthConfigId) {
+      const createResponse = await fetchWithRetry({
+        url: `${baseUrl}/auth_configs`,
+        method: "POST",
+        headers: buildHeaders(apiKey),
+        body: {
+          toolkit: { slug: toolkit },
+          auth_config: {
+            type: "use_composio_managed_auth",
+            credentials: {},
+            restrict_to_following_tools: [],
+          },
+        },
+        timeoutMs,
+        log: sdk.log,
+      });
+
+      if (createResponse.status !== 201 && createResponse.status !== 200) {
+        throw new Error(
+          getComposioMessage(createResponse.data) ||
+            `Could not create auth config for ${toolkit}: HTTP ${createResponse.status}`
+        );
+      }
+
+      resolvedAuthConfigId = createResponse.data?.auth_config?.id ?? createResponse.data?.id;
+    }
+
+    if (!resolvedAuthConfigId) {
+      throw new Error(`Composio did not return an auth config id for ${toolkit}`);
+    }
+
+    const linkBody = {
+      auth_config_id: resolvedAuthConfigId,
+      user_id: userId,
+    };
+    if (callbackUrl) linkBody.callback_url = callbackUrl;
+    if (alias) linkBody.alias = alias;
+
+    const linkResponse = await fetchWithRetry({
+      url: `${baseUrl}/connected_accounts/link`,
+      method: "POST",
+      headers: buildHeaders(apiKey),
+      body: linkBody,
+      timeoutMs,
+      log: sdk.log,
+    });
+
+    if (linkResponse.status !== 201 && linkResponse.status !== 200) {
+      throw new Error(
+        getComposioMessage(linkResponse.data) ||
+          `Could not create connection link for ${toolkit}: HTTP ${linkResponse.status}`
+      );
+    }
+
+    return {
+      url: linkResponse.data?.redirect_url ?? linkResponse.data?.redirectUrl,
+      service: toolkit,
+      auth_config_id: resolvedAuthConfigId,
+      connected_account_id: linkResponse.data?.connected_account_id ?? null,
+      expires_at: linkResponse.data?.expires_at ?? null,
+      link_token: linkResponse.data?.link_token ?? null,
     };
   }
 
@@ -313,7 +561,7 @@ export const tools = (sdk) => {
       const apiKey = getApiKey();
       if (!apiKey) return notConfiguredError();
 
-      const { baseUrl, timeoutMs } = getConfig();
+      const { baseUrl, timeoutMs, toolkitVersions } = getConfig();
       const limit = params.limit ?? 50;
       const includeParams = params.include_params ?? false;
 
@@ -324,26 +572,13 @@ export const tools = (sdk) => {
         try {
           const query = {};
           if (params.query) query.search = params.query;
-          if (params.toolkit) query.toolkits = [params.toolkit];
+          if (params.toolkit) query.toolkits = [normalizeToolkitSlug(params.toolkit)];
           query.limit = limit;
+          if (toolkitVersions) query.toolkitVersions = toolkitVersions;
 
           const toolList = await composioSdk.tools.getRawComposioTools(query);
           const items = Array.isArray(toolList?.items) ? toolList.items : [];
-
-          const tools = items.map((item) => {
-            const tool = {
-              name: item.slug ?? item.name ?? item.id,
-              slug: item.slug ?? item.name ?? item.id,
-              description: item.description ?? "",
-              toolkit: item.toolkit?.slug ?? item.toolkit?.name ?? item.appKey ?? item.app ?? "",
-              auth_required: item.requiresAuth ?? item.auth_required ?? false,
-              tags: item.tags ?? [],
-            };
-            if (includeParams) {
-              tool.parameters_schema = item.inputParameters ?? item.parameters ?? item.schema ?? null;
-            }
-            return tool;
-          });
+          const tools = items.map((item) => formatTool(item, includeParams));
 
           sdk.log.info(`composio_search_tools: found ${tools.length} tools (SDK)`);
           return {
@@ -364,12 +599,13 @@ export const tools = (sdk) => {
 
       // --- HTTP fallback path ---
       const qs = new URLSearchParams();
-      if (params.query) qs.set("search", params.query);
-      if (params.toolkit) qs.set("appName", params.toolkit);
+      if (params.query) qs.set("query", params.query);
+      if (params.toolkit) qs.set("toolkit_slug", normalizeToolkitSlug(params.toolkit));
       qs.set("limit", String(limit));
-      if (includeParams) qs.set("showSchema", "true");
+      qs.set("include_deprecated", "false");
+      if (toolkitVersions) qs.set("toolkit_versions", String(toolkitVersions));
 
-      const url = `${baseUrl}/actions?${qs.toString()}`;
+      const url = `${baseUrl}/tools?${qs.toString()}`;
       sdk.log.debug(`composio_search_tools: GET ${url.replace(apiKey, "[REDACTED]")}`);
 
       try {
@@ -391,22 +627,8 @@ export const tools = (sdk) => {
 
         const rawData = response.data;
         const items = rawData?.items ?? rawData?.actions ?? rawData?.data ?? [];
-
         const tools = Array.isArray(items)
-          ? items.map((item) => {
-              const tool = {
-                name: item.name ?? item.slug ?? item.id,
-                slug: item.name ?? item.slug ?? item.id,
-                description: item.description ?? "",
-                toolkit: item.appKey ?? item.app ?? item.toolkit ?? "",
-                auth_required: item.requiresAuth ?? item.auth_required ?? false,
-                tags: item.tags ?? [],
-              };
-              if (includeParams) {
-                tool.parameters_schema = item.parameters ?? item.schema ?? null;
-              }
-              return tool;
-            })
+          ? items.map((item) => formatTool(item, includeParams))
           : [];
 
         sdk.log.info(`composio_search_tools: found ${tools.length} tools`);
@@ -418,7 +640,8 @@ export const tools = (sdk) => {
             count: tools.length,
             query: params.query ?? null,
             toolkit: params.toolkit ?? null,
-            total_available: rawData?.totalItems ?? rawData?.total ?? null,
+            total_available: rawData?.total_items ?? rawData?.totalItems ?? rawData?.total ?? null,
+            next_cursor: rawData?.next_cursor ?? null,
           },
         };
       } catch (err) {
@@ -458,6 +681,11 @@ export const tools = (sdk) => {
           description:
             "Optional: specific connected account ID when the user has multiple connections for the same service",
         },
+        version: {
+          type: "string",
+          description:
+            "Optional Composio tool version. Defaults to plugin config tool_version (latest).",
+        },
         timeout_override_ms: {
           type: "integer",
           description:
@@ -473,7 +701,7 @@ export const tools = (sdk) => {
       const apiKey = getApiKey();
       if (!apiKey) return notConfiguredError();
 
-      const { baseUrl, timeoutMs } = getConfig();
+      const { baseUrl, timeoutMs, toolVersion } = getConfig();
 
       if (!params.tool_slug || typeof params.tool_slug !== "string") {
         return { success: false, error: "tool_slug is required and must be a string" };
@@ -482,7 +710,10 @@ export const tools = (sdk) => {
         return { success: false, error: "parameters is required and must be an object" };
       }
 
-      sdk.log.debug(`composio_execute_tool: ${params.tool_slug}`);
+      const normalizedSlug = normalizeToolSlug(params.tool_slug);
+      const userId = getUserId(context);
+
+      sdk.log.debug(`composio_execute_tool: ${normalizedSlug}`);
 
       // --- Try SDK path first ---
       const composioSdk = await getComposioSdk(apiKey);
@@ -490,18 +721,19 @@ export const tools = (sdk) => {
         sdk.log.debug(`composio_execute_tool: using @composio/core SDK`);
         try {
           const execBody = {
+            userId,
             arguments: params.parameters,
             dangerouslySkipVersionCheck: true,
           };
+          if (params.version ?? toolVersion) {
+            execBody.version = params.version ?? toolVersion;
+          }
           if (params.connected_account_id) {
             execBody.connectedAccountId = params.connected_account_id;
           }
-          if (context?.chatId) {
-            execBody.userId = String(context.chatId);
-          }
 
           const result = await composioSdk.tools.execute(
-            params.tool_slug.toUpperCase(),
+            normalizedSlug,
             execBody
           );
 
@@ -526,7 +758,7 @@ export const tools = (sdk) => {
               auth: {
                 service,
                 connect_url: connectUrl,
-                message: `Authorization required for ${service.toUpperCase()}. Click the link to connect.`,
+                message: `Authorization required for ${service.toUpperCase()}. Call composio_auth_link for a fresh connection link.`,
               },
             };
           }
@@ -537,18 +769,17 @@ export const tools = (sdk) => {
 
       // --- HTTP fallback path ---
       const effectiveTimeout = params.timeout_override_ms ?? timeoutMs;
-      const url = `${baseUrl}/actions/${encodeURIComponent(params.tool_slug)}/execute`;
+      const url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
 
-      sdk.log.debug(`composio_execute_tool: POST ${params.tool_slug} via HTTP (timeout=${effectiveTimeout}ms)`);
+      sdk.log.debug(`composio_execute_tool: POST ${normalizedSlug} via HTTP (timeout=${effectiveTimeout}ms)`);
 
       const body = {
-        input: params.parameters,
+        user_id: userId,
+        arguments: params.parameters,
+        version: params.version ?? toolVersion,
       };
       if (params.connected_account_id) {
-        body.connectedAccountId = params.connected_account_id;
-      }
-      if (context?.chatId) {
-        body.entityId = String(context.chatId);
+        body.connected_account_id = params.connected_account_id;
       }
 
       try {
@@ -571,24 +802,28 @@ export const tools = (sdk) => {
             auth: {
               service,
               connect_url: connectUrl,
-              message: `Authorization required for ${service.toUpperCase()}. Click the link to connect.`,
+              message: `Authorization required for ${service.toUpperCase()}. Call composio_auth_link for a fresh connection link.`,
             },
           };
         }
 
         if (response.status !== 200) {
           const errMsg =
-            response.data?.message ??
-            response.data?.error ??
+            getComposioMessage(response.data) ||
             `HTTP ${response.status}`;
           sdk.log.debug(`composio_execute_tool: error response ${response.status}`);
           return { success: false, error: `Tool execution failed: ${errMsg}` };
         }
 
-        sdk.log.info(`composio_execute_tool: ${params.tool_slug} succeeded`);
+        if (response.data?.successful === false) {
+          const errMsg = getComposioMessage(response.data) || "Composio tool returned unsuccessful=false";
+          return { success: false, error: `Tool execution failed: ${errMsg}` };
+        }
+
+        sdk.log.info(`composio_execute_tool: ${normalizedSlug} succeeded`);
         return {
           success: true,
-          data: response.data?.response ?? response.data?.data ?? response.data,
+          data: formatExecutionData(response.data),
         };
       } catch (err) {
         sdk.log.debug(`composio_execute_tool: exception — ${formatApiError(err)}`);
@@ -635,6 +870,14 @@ export const tools = (sdk) => {
                 minimum: 1000,
                 maximum: 300000,
               },
+              connected_account_id: {
+                type: "string",
+                description: "Optional connected account ID for this execution",
+              },
+              version: {
+                type: "string",
+                description: "Optional Composio tool version for this execution",
+              },
             },
             required: ["tool_slug", "parameters"],
           },
@@ -658,7 +901,7 @@ export const tools = (sdk) => {
       const apiKey = getApiKey();
       if (!apiKey) return notConfiguredError();
 
-      const { baseUrl, timeoutMs, maxParallelExecutions } = getConfig();
+      const { baseUrl, timeoutMs, maxParallelExecutions, toolVersion } = getConfig();
       const failFast = params.fail_fast ?? false;
       const maxParallel = Math.min(
         params.max_parallel ?? maxParallelExecutions,
@@ -711,21 +954,24 @@ export const tools = (sdk) => {
           // --- Try SDK path first ---
           if (composioSdk) {
             try {
+              const normalizedSlug = normalizeToolSlug(exec.tool_slug);
               const execBody = {
+                userId: getUserId(context),
                 arguments: exec.parameters,
                 dangerouslySkipVersionCheck: true,
+                version: exec.version ?? toolVersion,
               };
-              if (context?.chatId) {
-                execBody.userId = String(context.chatId);
+              if (exec.connected_account_id) {
+                execBody.connectedAccountId = exec.connected_account_id;
               }
 
               const result = await composioSdk.tools.execute(
-                exec.tool_slug.toUpperCase(),
+                normalizedSlug,
                 execBody
               );
 
               results[globalIdx] = {
-                tool_slug: exec.tool_slug,
+                tool_slug: normalizedSlug,
                 success: true,
                 data: result?.data ?? result,
               };
@@ -741,13 +987,13 @@ export const tools = (sdk) => {
                 const service = extractServiceFromSlug(exec.tool_slug);
                 const connectUrl = buildConnectUrl(baseUrl, apiKey, service, context);
                 results[globalIdx] = {
-                  tool_slug: exec.tool_slug,
+                  tool_slug: normalizeToolSlug(exec.tool_slug),
                   success: false,
                   error: "auth_required",
                   auth: {
                     service,
                     connect_url: connectUrl,
-                    message: `Authorization required for ${service.toUpperCase()}.`,
+                    message: `Authorization required for ${service.toUpperCase()}. Call composio_auth_link for a fresh connection link.`,
                   },
                 };
                 if (failFast) stopped = true;
@@ -759,14 +1005,17 @@ export const tools = (sdk) => {
           }
 
           // --- HTTP fallback path ---
+          const normalizedSlug = normalizeToolSlug(exec.tool_slug);
           const effectiveTimeout = exec.timeout_override_ms ?? timeoutMs;
-          const url = `${baseUrl}/actions/${encodeURIComponent(exec.tool_slug)}/execute`;
+          const url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
 
           const body = {
-            input: exec.parameters,
+            user_id: getUserId(context),
+            arguments: exec.parameters,
+            version: exec.version ?? toolVersion,
           };
-          if (context?.chatId) {
-            body.entityId = String(context.chatId);
+          if (exec.connected_account_id) {
+            body.connected_account_id = exec.connected_account_id;
           }
 
           try {
@@ -783,13 +1032,13 @@ export const tools = (sdk) => {
               const service = extractServiceFromSlug(exec.tool_slug);
               const connectUrl = buildConnectUrl(baseUrl, apiKey, service, context);
               const result = {
-                tool_slug: exec.tool_slug,
+                tool_slug: normalizedSlug,
                 success: false,
                 error: "auth_required",
                 auth: {
                   service,
                   connect_url: connectUrl,
-                  message: `Authorization required for ${service.toUpperCase()}.`,
+                  message: `Authorization required for ${service.toUpperCase()}. Call composio_auth_link for a fresh connection link.`,
                 },
               };
               results[globalIdx] = result;
@@ -798,12 +1047,9 @@ export const tools = (sdk) => {
             }
 
             if (response.status !== 200) {
-              const errMsg =
-                response.data?.message ??
-                response.data?.error ??
-                `HTTP ${response.status}`;
+              const errMsg = getComposioMessage(response.data) || `HTTP ${response.status}`;
               results[globalIdx] = {
-                tool_slug: exec.tool_slug,
+                tool_slug: normalizedSlug,
                 success: false,
                 error: errMsg,
               };
@@ -811,14 +1057,24 @@ export const tools = (sdk) => {
               return;
             }
 
+            if (response.data?.successful === false) {
+              results[globalIdx] = {
+                tool_slug: normalizedSlug,
+                success: false,
+                error: getComposioMessage(response.data) || "Composio tool returned unsuccessful=false",
+              };
+              if (failFast) stopped = true;
+              return;
+            }
+
             results[globalIdx] = {
-              tool_slug: exec.tool_slug,
+              tool_slug: normalizedSlug,
               success: true,
-              data: response.data?.response ?? response.data?.data ?? response.data,
+              data: formatExecutionData(response.data),
             };
           } catch (err) {
             results[globalIdx] = {
-              tool_slug: exec.tool_slug,
+              tool_slug: normalizeToolSlug(exec.tool_slug),
               success: false,
               error: formatApiError(err),
             };
@@ -872,6 +1128,20 @@ export const tools = (sdk) => {
           description:
             "Optional message to show the user after they complete authorization",
         },
+        auth_config_id: {
+          type: "string",
+          description:
+            "Optional Composio auth config ID. If omitted, the plugin finds or creates a Composio-managed auth config for the service.",
+        },
+        callback_url: {
+          type: "string",
+          description:
+            "Optional URL Composio should redirect the user to after authentication.",
+        },
+        alias: {
+          type: "string",
+          description: "Optional human-readable alias for this connected account.",
+        },
       },
       required: ["service"],
     },
@@ -880,41 +1150,70 @@ export const tools = (sdk) => {
       const apiKey = getApiKey();
       if (!apiKey) return notConfiguredError();
 
-      const { baseUrl, timeoutMs } = getConfig();
-
       if (!params.service || typeof params.service !== "string") {
         return { success: false, error: "service is required and must be a string" };
       }
 
-      const service = params.service.toLowerCase().trim();
+      const service = normalizeToolkitSlug(params.service);
+      const userId = getUserId(context);
       sdk.log.debug(`composio_auth_link: generating link for ${service}`);
 
-      const connectUrl = buildConnectUrl(baseUrl, apiKey, service, context);
-
-      // Attempt to get a fresh connection initiation URL from the API
-      let finalUrl = connectUrl;
+      let link;
       try {
-        const qs = new URLSearchParams();
-        if (context?.chatId) qs.set("entityId", String(context.chatId));
-        qs.set("redirectUri", "https://app.composio.dev/");
-
-        const url = `${baseUrl}/auth/${encodeURIComponent(service)}/initiate?${qs.toString()}`;
-        const response = await fetchWithRetry({
-          url,
-          method: "GET",
-          headers: buildHeaders(apiKey),
-          timeoutMs,
-          log: sdk.log,
-        });
-
-        if (response.status === 200 && response.data?.redirectUrl) {
-          finalUrl = response.data.redirectUrl;
-        } else if (response.status === 200 && response.data?.url) {
-          finalUrl = response.data.url;
+        const composioSdk = await getComposioSdk(apiKey);
+        if (composioSdk?.toolkits?.authorize) {
+          const request = await composioSdk.toolkits.authorize(
+            userId,
+            service,
+            params.auth_config_id
+          );
+          link = {
+            url: request.redirectUrl ?? request.redirect_url,
+            service,
+            auth_config_id: request.authConfigId ?? request.auth_config_id ?? params.auth_config_id ?? null,
+            connected_account_id: request.connectedAccountId ?? request.connected_account_id ?? null,
+            expires_at: request.expiresAt ?? request.expires_at ?? null,
+            link_token: request.linkToken ?? request.link_token ?? null,
+          };
         }
-      } catch {
-        // Fall back to the static connect URL
-        sdk.log.debug(`composio_auth_link: failed to get dynamic URL, using static fallback`);
+      } catch (err) {
+        sdk.log.debug(`composio_auth_link: SDK authorize failed — ${formatApiError(err)}, falling back to HTTP`);
+      }
+
+      if (!link?.url) {
+        try {
+          link = await createAuthLink({
+            apiKey,
+            service,
+            userId,
+            authConfigId: params.auth_config_id,
+            callbackUrl: params.callback_url,
+            alias: params.alias,
+          });
+        } catch (err) {
+          sdk.log.debug(`composio_auth_link: HTTP authorize failed — ${formatApiError(err)}`);
+          return {
+            success: false,
+            error: `Could not create Composio auth link for ${service}: ${formatApiError(err)}`,
+            data: {
+              service,
+              user_id: userId,
+              hint:
+                "Create or verify a Composio auth config for this toolkit, then retry with auth_config_id if needed.",
+            },
+          };
+        }
+      }
+
+      if (!link?.url) {
+        return {
+          success: false,
+          error: `Composio did not return a connect URL for ${service}`,
+          data: {
+            service,
+            user_id: userId,
+          },
+        };
       }
 
       const serviceUpper = service.toUpperCase();
@@ -927,9 +1226,13 @@ export const tools = (sdk) => {
       return {
         success: true,
         data: {
-          message: `🔗 Click to connect **${serviceUpper}**:`,
-          url: finalUrl,
+          message: `Click to connect ${serviceUpper}:`,
+          url: link.url,
           service,
+          user_id: userId,
+          auth_config_id: link.auth_config_id ?? null,
+          connected_account_id: link.connected_account_id ?? null,
+          expires_at: link.expires_at ?? null,
           hint: afterMsg,
         },
       };
@@ -941,20 +1244,23 @@ export const tools = (sdk) => {
 
 // ---------------------------------------------------------------------------
 // Internal utility — build a Composio connect URL for a service.
-// Not exported; used only within this module.
+// Used only as a last-resort hint when a tool execution reports auth_required.
 // ---------------------------------------------------------------------------
 
 /**
- * Build a Composio OAuth connect URL.
+ * Build a Composio OAuth connect URL hint.
  * @param {string} baseUrl
  * @param {string} _apiKey - kept for signature consistency, not included in URL
  * @param {string} service
- * @param {{ chatId?: string | number } | undefined} context
+ * @param {unknown} context
  * @returns {string}
  */
 function buildConnectUrl(baseUrl, _apiKey, service, context) {
-  const appBase = baseUrl.replace(/\/api\/v\d+.*$/, "").replace("api.", "app.");
+  const appBase = baseUrl.replace(/\/api\/v\d+(?:\.\d+)?$/, "").replace("backend.", "app.");
   const qs = new URLSearchParams({ app: service });
-  if (context?.chatId) qs.set("user_id", String(context.chatId));
+  if (isRecord(context)) {
+    const userId = getUserId(context);
+    if (userId) qs.set("user_id", userId);
+  }
   return `${appBase}/connect?${qs.toString()}`;
 }

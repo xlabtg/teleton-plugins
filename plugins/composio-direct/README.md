@@ -13,16 +13,24 @@ Direct integration with **1000+ Composio automation tools** — no MCP transport
 ## Setup
 
 1. Get your Composio API key at <https://app.composio.dev/settings>
-2. Set the `composio_api_key` secret in Teleton (or set `COMPOSIO_API_KEY` env var)
+2. Set the `composio_api_key` secret in Teleton:
+
+```text
+/plugin set composio-direct composio_api_key <your-composio-api-key>
+```
+
+For container and CI deployments, Teleton also resolves the secret from `COMPOSIO_DIRECT_COMPOSIO_API_KEY`. The plugin keeps `COMPOSIO_API_KEY` as a direct fallback for older deployments.
 
 ```yaml
 # config.yaml example
 plugins:
-  composio-direct:
-    composio_api_key: "${COMPOSIO_API_KEY}"
-    base_url: "https://api.composio.dev/api/v1"  # optional
-    timeout_ms: 30000                             # optional (default: 30s)
-    max_parallel_executions: 10                   # optional (default: 10)
+  composio_direct:
+    base_url: "https://backend.composio.dev/api/v3.1"  # optional
+    timeout_ms: 30000                                  # optional (default: 30s)
+    max_parallel_executions: 10                        # optional (default: 10)
+    tool_version: "latest"                             # optional
+    toolkit_versions: "latest"                         # optional
+    auth_config_ids: {}                                # optional service -> auth config id
 ```
 
 ## Tools
@@ -45,11 +53,12 @@ Search for available Composio tools by name, description, or toolkit.
   "data": {
     "tools": [
       {
-        "name": "github_create_issue",
-        "slug": "github_create_issue",
+        "name": "GITHUB_CREATE_ISSUE",
+        "slug": "GITHUB_CREATE_ISSUE",
         "description": "Create a new issue in a GitHub repository",
         "toolkit": "github",
         "auth_required": true,
+        "version": "latest",
         "tags": ["issue", "github"]
       }
     ],
@@ -71,13 +80,18 @@ Execute a single Composio tool by its slug.
 | `tool_slug` | string | **yes** | Tool identifier (e.g. `"github_create_issue"`) |
 | `parameters` | object | **yes** | Tool-specific parameters |
 | `connected_account_id` | string | no | Use a specific connection when multiple exist |
+| `version` | string | no | Composio tool version (default: plugin `tool_version`) |
 | `timeout_override_ms` | integer | no | Override default timeout (ms) |
 
 **Success:**
 ```json
 {
   "success": true,
-  "data": { "issue_number": 42, "url": "https://github.com/org/repo/issues/42" }
+  "data": {
+    "issue_number": 42,
+    "url": "https://github.com/org/repo/issues/42",
+    "log_id": "log_123"
+  }
 }
 ```
 
@@ -88,8 +102,8 @@ Execute a single Composio tool by its slug.
   "error": "auth_required",
   "auth": {
     "service": "github",
-    "connect_url": "https://app.composio.dev/connect?app=github",
-    "message": "Authorization required for GITHUB. Click the link to connect."
+    "connect_url": "https://app.composio.dev/connect?app=github&user_id=123456",
+    "message": "Authorization required for GITHUB. Call composio_auth_link for a fresh connection link."
   }
 }
 ```
@@ -102,7 +116,7 @@ Execute multiple tools in parallel.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `executions` | array | **yes** | Array of `{ tool_slug, parameters, timeout_override_ms? }` |
+| `executions` | array | **yes** | Array of `{ tool_slug, parameters, connected_account_id?, version?, timeout_override_ms? }` |
 | `fail_fast` | boolean | no | Stop on first error (default: false) |
 | `max_parallel` | integer | no | Max concurrent tools, 1–50 (default: 10) |
 
@@ -112,8 +126,8 @@ Execute multiple tools in parallel.
   "success": true,
   "data": {
     "results": [
-      { "tool_slug": "github_create_issue", "success": true, "data": { "id": 1 } },
-      { "tool_slug": "gmail_send_email", "success": false, "error": "auth_required", "auth": { ... } }
+      { "tool_slug": "GITHUB_CREATE_ISSUE", "success": true, "data": { "id": 1 } },
+      { "tool_slug": "GMAIL_SEND_EMAIL", "success": false, "error": "auth_required", "auth": { "service": "gmail" } }
     ],
     "summary": { "succeeded": 1, "failed": 1, "skipped": 0, "total": 2 }
   }
@@ -130,15 +144,21 @@ Get an OAuth authorization link for a service.
 |---|---|---|---|
 | `service` | string | **yes** | Service name (e.g. `"github"`, `"gmail"`, `"slack"`, `"notion"`, `"linear"`, `"jira"`) |
 | `redirect_after_auth` | string | no | Message shown after the user authorizes |
+| `auth_config_id` | string | no | Existing Composio auth config ID to use |
+| `callback_url` | string | no | URL Composio should redirect to after authentication |
+| `alias` | string | no | Human-readable alias for the connected account |
 
 **Example:**
 ```json
 {
   "success": true,
   "data": {
-    "message": "🔗 Click to connect **GITHUB**:",
-    "url": "https://app.composio.dev/connect?app=github&user_id=123456",
+    "message": "Click to connect GITHUB:",
+    "url": "https://connect.composio.dev/link/ln_123",
     "service": "github",
+    "user_id": "123456",
+    "auth_config_id": "ac_123",
+    "connected_account_id": "ca_123",
     "hint": "After authorizing, write 'done' and repeat your request."
   }
 }
@@ -159,6 +179,9 @@ Get an OAuth authorization link for a service.
 ## Running tests
 
 ```sh
+# CI-discovered Teleton integration test
+node --test plugins/composio-direct/tests/index.test.js
+
 # Unit tests only
 node --test plugins/composio-direct/test/unit/composio-direct.test.js
 
@@ -166,6 +189,16 @@ node --test plugins/composio-direct/test/unit/composio-direct.test.js
 node --test plugins/composio-direct/test/integration/composio-api.test.js
 
 # All tests
+node --test plugins/composio-direct/tests/index.test.js \
+         plugins/composio-direct/test/unit/composio-direct.test.js \
+         plugins/composio-direct/test/integration/composio-api.test.js
+```
+
+The repository-wide `npm test` command also discovers `plugins/composio-direct/tests/index.test.js`.
+
+Legacy explicit tests:
+
+```sh
 node --test plugins/composio-direct/test/unit/composio-direct.test.js \
          plugins/composio-direct/test/integration/composio-api.test.js
 ```

@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
   "author": {
     "name": "xlabtg",
@@ -14,14 +14,17 @@
   "secrets": {
     "composio_api_key": {
       "required": true,
-      "env": "COMPOSIO_API_KEY",
+      "env": "COMPOSIO_DIRECT_COMPOSIO_API_KEY",
       "description": "Composio API key (create at https://app.composio.dev/settings)"
     }
   },
   "defaultConfig": {
-    "base_url": "https://api.composio.dev/api/v1",
+    "base_url": "https://backend.composio.dev/api/v3.1",
     "timeout_ms": 30000,
-    "max_parallel_executions": 10
+    "max_parallel_executions": 10,
+    "tool_version": "latest",
+    "toolkit_versions": "latest",
+    "auth_config_ids": {}
   },
   "tools": [
     { "name": "composio_search_tools", "description": "Search for available Composio tools by query, toolkit name, or description" },
