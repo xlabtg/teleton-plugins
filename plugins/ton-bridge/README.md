@@ -31,6 +31,8 @@ Restart Teleton — the plugin is auto-loaded from `~/.teleton/plugins/`. No cha
 - "Send a message about TON Bridge with a button" → custom message with inline button
 - "Share a TON Bridge link with the text: Transfer your assets seamlessly" → custom text + inline button
 
+Tool callers must pass `chatId` explicitly; these tools do not read the destination chat from runtime `context`.
+
 ## Configuration
 
 Configuration is optional — the plugin works out of the box with defaults. Override in `config.yaml` only if needed:
@@ -53,6 +55,7 @@ Send a message with a TON Bridge Mini App button. Use when the user asks to open
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
 | `message` | string | No | — | Optional message text to show with the button |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 
@@ -62,6 +65,7 @@ Send an info message about TON Bridge with a Mini App button. Use when the user 
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 
 ### `ton_bridge_custom_message`
@@ -70,6 +74,7 @@ Send a custom message alongside a TON Bridge button.
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
+| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
 | `customMessage` | string | Yes | — | Custom message text to display with the button |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 

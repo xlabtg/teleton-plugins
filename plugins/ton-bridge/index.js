@@ -47,6 +47,15 @@ function buildMessageWithLink(text, buttonText, url) {
   };
 }
 
+function normalizeChatId(chatId) {
+  if (chatId === undefined || chatId === null) {
+    return null;
+  }
+
+  const chatIdString = String(chatId).trim();
+  return chatIdString ? chatIdString : null;
+}
+
 // ─── Tools ────────────────────────────────────────────────────────────────────
 
 export const tools = (sdk) => [
@@ -59,6 +68,10 @@ export const tools = (sdk) => [
     parameters: {
       type: "object",
       properties: {
+        chatId: {
+          type: "string",
+          description: "The Telegram chat ID to send the message to (required)",
+        },
         message: {
           type: "string",
           description: "Optional message text to show with the button",
@@ -72,12 +85,16 @@ export const tools = (sdk) => [
           maxLength: 64,
         },
       },
+      required: ["chatId"],
     },
-    execute: async (params, context) => {
+    execute: async (params = {}, context) => {
       try {
-        // DEBUG: log context and params to diagnose chatId issue
-        sdk.log?.debug("ton_bridge_open context:", JSON.stringify(context, null, 2));
-        sdk.log?.debug("ton_bridge_open params:", JSON.stringify(params, null, 2));
+        const chatId = normalizeChatId(params.chatId);
+        if (!chatId) {
+          const error = "chatId is required";
+          sdk.log?.error(error);
+          return { success: false, error };
+        }
 
         const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
@@ -91,27 +108,19 @@ export const tools = (sdk) => [
           `ton_bridge_open called by ${context?.senderId ?? "unknown"}`
         );
 
-        // Validate chatId
-        if (!context?.chatId) {
-          const error = "Missing chatId in context";
-          sdk.log?.error(error);
-          return { success: false, error };
-        }
-
         const { text: fullText, opts } = buildMessageWithLink(text, buttonText, url);
 
-        // DEBUG: log what we're about to send
-        sdk.log?.debug("Sending message:", { chatId: context.chatId, text: fullText, opts });
+        sdk.log?.debug("ton_bridge_open sending message:", { chatId, text: fullText, opts });
 
         const messageId = await sdk.telegram.sendMessage(
-          context.chatId,
+          chatId,
           fullText,
           opts
         );
 
         return {
           success: true,
-          data: { message_id: messageId, chat_id: context.chatId },
+          data: { message_id: messageId, chat_id: chatId },
         };
       } catch (err) {
         if (err.name === "PluginSDKError") {
@@ -133,6 +142,10 @@ export const tools = (sdk) => [
     parameters: {
       type: "object",
       properties: {
+        chatId: {
+          type: "string",
+          description: "The Telegram chat ID to send the message to (required)",
+        },
         buttonText: {
           type: "string",
           description: "Button label text. Omit to use the configured default. Do NOT include emoji here unless the user explicitly requested one.",
@@ -140,12 +153,16 @@ export const tools = (sdk) => [
           maxLength: 64,
         },
       },
+      required: ["chatId"],
     },
-    execute: async (params, context) => {
+    execute: async (params = {}, context) => {
       try {
-        // DEBUG: log context and params
-        sdk.log?.debug("ton_bridge_about context:", JSON.stringify(context, null, 2));
-        sdk.log?.debug("ton_bridge_about params:", JSON.stringify(params, null, 2));
+        const chatId = normalizeChatId(params.chatId);
+        if (!chatId) {
+          const error = "chatId is required";
+          sdk.log?.error(error);
+          return { success: false, error };
+        }
 
         const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
@@ -155,27 +172,20 @@ export const tools = (sdk) => [
           `ton_bridge_about called by ${context?.senderId ?? "unknown"}`
         );
 
-        if (!context?.chatId) {
-          const error = "Missing chatId in context";
-          sdk.log?.error(error);
-          return { success: false, error };
-        }
-
         const aboutText = "About TON Bridge\n\nTON Bridge is the #1 bridge in the TON Catalog. Transfer assets across chains seamlessly via the official Mini App.";
         const { text: fullText, opts } = buildMessageWithLink(aboutText, buttonText, url);
 
-        // DEBUG: log what we're about to send
-        sdk.log?.debug("Sending message:", { chatId: context.chatId, text: fullText, opts });
+        sdk.log?.debug("ton_bridge_about sending message:", { chatId, text: fullText, opts });
 
         const messageId = await sdk.telegram.sendMessage(
-          context.chatId,
+          chatId,
           fullText,
           opts
         );
 
         return {
           success: true,
-          data: { message_id: messageId, chat_id: context.chatId },
+          data: { message_id: messageId, chat_id: chatId },
         };
       } catch (err) {
         if (err.name === "PluginSDKError") {
@@ -197,6 +207,10 @@ export const tools = (sdk) => [
     parameters: {
       type: "object",
       properties: {
+        chatId: {
+          type: "string",
+          description: "The Telegram chat ID to send the message to (required)",
+        },
         customMessage: {
           type: "string",
           description: "Custom message text to display with the button",
@@ -210,13 +224,16 @@ export const tools = (sdk) => [
           maxLength: 64,
         },
       },
-      required: ["customMessage"],
+      required: ["chatId", "customMessage"],
     },
-    execute: async (params, context) => {
+    execute: async (params = {}, context) => {
       try {
-        // DEBUG: log context and params
-        sdk.log?.debug("ton_bridge_custom_message context:", JSON.stringify(context, null, 2));
-        sdk.log?.debug("ton_bridge_custom_message params:", JSON.stringify(params, null, 2));
+        const chatId = normalizeChatId(params.chatId);
+        if (!chatId) {
+          const error = "chatId is required";
+          sdk.log?.error(error);
+          return { success: false, error };
+        }
 
         const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
@@ -231,26 +248,19 @@ export const tools = (sdk) => [
           `ton_bridge_custom_message called by ${context?.senderId ?? "unknown"}`
         );
 
-        if (!context?.chatId) {
-          const error = "Missing chatId in context";
-          sdk.log?.error(error);
-          return { success: false, error };
-        }
-
         const { text: fullText, opts } = buildMessageWithLink(customMessage, buttonText, url);
 
-        // DEBUG: log what we're about to send
-        sdk.log?.debug("Sending message:", { chatId: context.chatId, text: fullText, opts });
+        sdk.log?.debug("ton_bridge_custom_message sending message:", { chatId, text: fullText, opts });
 
         const messageId = await sdk.telegram.sendMessage(
-          context.chatId,
+          chatId,
           fullText,
           opts
         );
 
         return {
           success: true,
-          data: { message_id: messageId, chat_id: context.chatId },
+          data: { message_id: messageId, chat_id: chatId },
         };
       } catch (err) {
         if (err.name === "PluginSDKError") {
