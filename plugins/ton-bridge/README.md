@@ -31,7 +31,7 @@ Restart Teleton — the plugin is auto-loaded from `~/.teleton/plugins/`. No cha
 - "Send a message about TON Bridge with a button" → custom message with inline button
 - "Share a TON Bridge link with the text: Transfer your assets seamlessly" → custom text + inline button
 
-Tool callers must pass `chatId` explicitly; these tools do not read the destination chat from runtime `context`.
+Tool callers should pass `chatId` explicitly. If an older dispatcher drops or wraps tool parameters, the plugin falls back to the current runtime `context.chatId` without serializing the full context object.
 
 ## Configuration
 
@@ -55,7 +55,7 @@ Send a message with a TON Bridge Mini App button. Use when the user asks to open
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
+| `chatId` | string | Yes | current runtime chat fallback | Telegram chat ID to send the message to |
 | `message` | string | No | — | Optional message text to show with the button |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 
@@ -65,7 +65,7 @@ Send an info message about TON Bridge with a Mini App button. Use when the user 
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
+| `chatId` | string | Yes | current runtime chat fallback | Telegram chat ID to send the message to |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 
 ### `ton_bridge_custom_message`
@@ -74,7 +74,7 @@ Send a custom message alongside a TON Bridge button.
 
 | Param | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `chatId` | string | Yes | — | Telegram chat ID to send the message to |
+| `chatId` | string | Yes | current runtime chat fallback | Telegram chat ID to send the message to |
 | `customMessage` | string | Yes | — | Custom message text to display with the button |
 | `buttonText` | string | No | config default | Button label. Do not include emoji unless user requested it. |
 

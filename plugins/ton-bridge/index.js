@@ -47,6 +47,27 @@ function buildMessageWithLink(text, buttonText, url) {
   };
 }
 
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readParam(params, key) {
+  const sources = [
+    params,
+    isObject(params) ? params.params : undefined,
+    isObject(params) ? params.arguments : undefined,
+    isObject(params) ? params.input : undefined,
+  ];
+
+  for (const source of sources) {
+    if (isObject(source) && source[key] !== undefined) {
+      return source[key];
+    }
+  }
+
+  return undefined;
+}
+
 function normalizeChatId(chatId) {
   if (chatId === undefined || chatId === null) {
     return null;
@@ -54,6 +75,12 @@ function normalizeChatId(chatId) {
 
   const chatIdString = String(chatId).trim();
   return chatIdString ? chatIdString : null;
+}
+
+function resolveChatId(params, context) {
+  return normalizeChatId(
+    readParam(params, "chatId") ?? readParam(params, "chat_id") ?? context?.chatId
+  );
 }
 
 // ─── Tools ────────────────────────────────────────────────────────────────────
@@ -89,19 +116,20 @@ export const tools = (sdk) => [
     },
     execute: async (params = {}, context) => {
       try {
-        const chatId = normalizeChatId(params.chatId);
+        const chatId = resolveChatId(params, context);
         if (!chatId) {
           const error = "chatId is required";
           sdk.log?.error(error);
           return { success: false, error };
         }
 
-        const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
+        const buttonText =
+          readParam(params, "buttonText") ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
         const url = buildUrl(startParam);
 
         const text =
-          params.message ??
+          readParam(params, "message") ??
           "TON Bridge — The #1 Bridge in the TON Catalog\n\nClick the button below to open TON Bridge Mini App.";
 
         sdk.log?.info(
@@ -157,14 +185,15 @@ export const tools = (sdk) => [
     },
     execute: async (params = {}, context) => {
       try {
-        const chatId = normalizeChatId(params.chatId);
+        const chatId = resolveChatId(params, context);
         if (!chatId) {
           const error = "chatId is required";
           sdk.log?.error(error);
           return { success: false, error };
         }
 
-        const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
+        const buttonText =
+          readParam(params, "buttonText") ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
         const url = buildUrl(startParam);
 
@@ -228,19 +257,20 @@ export const tools = (sdk) => [
     },
     execute: async (params = {}, context) => {
       try {
-        const chatId = normalizeChatId(params.chatId);
+        const chatId = resolveChatId(params, context);
         if (!chatId) {
           const error = "chatId is required";
           sdk.log?.error(error);
           return { success: false, error };
         }
 
-        const buttonText = params.buttonText ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
+        const buttonText =
+          readParam(params, "buttonText") ?? sdk.pluginConfig?.buttonText ?? "TON Bridge No1";
         const startParam = sdk.pluginConfig?.startParam ?? "";
         const url = buildUrl(startParam);
 
         const customMessage =
-          params.customMessage ??
+          readParam(params, "customMessage") ??
           sdk.pluginConfig?.customMessage ??
           "TON Bridge — The #1 Bridge in the TON Catalog\n\nClick the button below to open TON Bridge Mini App.";
 

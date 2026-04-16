@@ -257,12 +257,21 @@ describe("ton-bridge plugin", () => {
       assert.ok(result.error);
     });
 
-    it("returns failure when chatId param is missing", async () => {
-      const sdk = makeSdk();
+    it("falls back to current context chatId when chatId param is missing", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 55;
+          },
+        },
+      });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_open");
       const result = await tool.execute({}, makeContext({ chatId: 111 }));
-      assert.equal(result.success, false);
-      assert.equal(result.error, "chatId is required");
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "111");
+      assert.equal(capturedChatId, "111");
     });
 
     it("returns success when context is undefined and chatId param is provided", async () => {
@@ -355,12 +364,21 @@ describe("ton-bridge plugin", () => {
       assert.equal(result.success, false);
     });
 
-    it("returns failure when chatId param is missing", async () => {
-      const sdk = makeSdk();
+    it("falls back to current context chatId when chatId param is missing", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 66;
+          },
+        },
+      });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_about");
       const result = await tool.execute({}, makeContext({ chatId: 111 }));
-      assert.equal(result.success, false);
-      assert.equal(result.error, "chatId is required");
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "111");
+      assert.equal(capturedChatId, "111");
     });
   });
 
@@ -415,6 +433,29 @@ describe("ton-bridge plugin", () => {
       assert.equal(capturedChatId, "chat-789");
     });
 
+    it("accepts dispatcher-wrapped params for chatId and customMessage", async () => {
+      let capturedChatId, capturedText;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId, text) => {
+            capturedChatId = chatId;
+            capturedText = text;
+            return 88;
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
+      const result = await tool.execute(
+        { params: { chatId: "wrapped-chat", customMessage: "Wrapped message" } },
+        makeContext({ chatId: undefined })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "wrapped-chat");
+      assert.equal(capturedChatId, "wrapped-chat");
+      assert.equal(capturedText, "Wrapped message");
+    });
+
     it("returns failure when sendMessage throws", async () => {
       const sdk = makeSdk({
         telegram: {
@@ -427,12 +468,21 @@ describe("ton-bridge plugin", () => {
       assert.ok(result.error);
     });
 
-    it("returns failure when chatId param is missing", async () => {
-      const sdk = makeSdk();
+    it("falls back to current context chatId when chatId param is missing", async () => {
+      let capturedChatId;
+      const sdk = makeSdk({
+        telegram: {
+          sendMessage: async (chatId) => {
+            capturedChatId = chatId;
+            return 77;
+          },
+        },
+      });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_bridge_custom_message");
-      const result = await tool.execute({ customMessage: "test" }, makeContext({ chatId: undefined }));
-      assert.equal(result.success, false);
-      assert.equal(result.error, "chatId is required");
+      const result = await tool.execute({ customMessage: "test" }, makeContext({ chatId: 111 }));
+      assert.equal(result.success, true);
+      assert.equal(result.data.chat_id, "111");
+      assert.equal(capturedChatId, "111");
     });
 
     it("uses chatId and customMessage parameters as required", () => {
