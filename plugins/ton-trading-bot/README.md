@@ -52,6 +52,9 @@ Each tool does exactly one thing. The LLM composes them:
 36. ton_trading_position_sizing              → optimal position size based on volatility
 37. ton_trading_cross_dex_routing            → optimal split routing across multiple DEXes
 38. ton_trading_get_best_price               → compare prices across STON.fi, DeDust, TONCO
+39. ton_trading_get_open_positions           → list open real or simulation positions
+40. ton_trading_close_position               → close one open position by trade ID
+41. ton_trading_close_all_positions          → close all open positions for a mode
 ```
 
 ## Tools
@@ -64,6 +67,9 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_simulate_trade` | Paper-trade using virtual balance (no real funds) | action |
 | `ton_trading_execute_swap` | Execute a real swap on STON.fi or DeDust (DM-only) | action |
 | `ton_trading_record_trade` | Close a trade and record final output / PnL | action |
+| `ton_trading_get_open_positions` | List open real or simulation positions | data-bearing |
+| `ton_trading_close_position` | Close one open position by trade ID | action |
+| `ton_trading_close_all_positions` | Close all open positions for a selected mode | action |
 | `ton_trading_get_arbitrage_opportunities` | Find cross-DEX price differences for a token pair | data-bearing |
 | `ton_trading_get_token_listings` | Fetch recently listed tokens on TON DEXes for sniping | data-bearing |
 | `ton_trading_get_token_info` | Detailed token info: price, market cap, holders, volume | data-bearing |
@@ -126,6 +132,9 @@ plugins:
 - "Simulate buying USDT with 5 TON"
 - "Execute swap: 2 TON → USDT with 5% slippage"
 - "Record trade #3 closed at 2.1 USDT"
+- "Show open simulation positions"
+- "Close simulation position #7"
+- "Close all open simulation positions"
 
 ### Paper-trade workflow
 
@@ -196,6 +205,35 @@ plugins:
 | `trade_id` | integer | Yes | — | Journal trade ID |
 | `amount_out` | number | Yes | — | Actual amount received |
 | `note` | string | No | — | Optional note (e.g. exit reason) |
+
+### `ton_trading_get_open_positions`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | No | all | "real", "simulation", or "all" |
+| `limit` | integer | No | 50 | Max open positions to return (1–100) |
+
+### `ton_trading_close_position`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `trade_id` | integer | Yes | — | Open journal trade ID to close |
+| `mode` | string | Yes | — | "real" or "simulation"; must match the trade |
+| `amount` | number | No | trade amount_out | Override amount of acquired asset to sell |
+| `slippage` | number | No | config default | Slippage for real reverse swap |
+| `dex` | string | No | auto | "stonfi" or "dedust" |
+| `exit_price_usd` | number | No | TON price when available | USD price of original from_asset at close |
+| `note` | string | No | — | Optional close note |
+
+### `ton_trading_close_all_positions`
+
+| Param | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `mode` | string | Yes | — | "real" or "simulation" |
+| `slippage` | number | No | config default | Slippage for real reverse swaps |
+| `dex` | string | No | auto | "stonfi" or "dedust" |
+| `exit_price_usd` | number | No | TON price when available | USD price applied to all closed positions |
+| `note` | string | No | — | Optional close note |
 
 ### `ton_trading_set_take_profit`
 
@@ -329,7 +367,7 @@ Risk parameters are enforced by `ton_trading_validate_trade` before any trade:
 
 - **maxTradePercent** (default 10%) — no single trade can exceed this percentage of the balance
 - **minBalanceTON** (default 1 TON) — trading blocked if balance falls below this floor
-- **scope: dm-only** on `ton_trading_execute_swap` and `ton_trading_auto_execute` — real trades only in direct messages
+- **scope: dm-only** on `ton_trading_execute_swap`, `ton_trading_auto_execute`, `ton_trading_close_position`, and `ton_trading_close_all_positions` — real trades and closes only in direct messages
 
 The LLM reads the validation result and decides whether to proceed.
 

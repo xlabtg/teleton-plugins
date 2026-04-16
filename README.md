@@ -76,13 +76,13 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 ## Available Plugins
 
-> **28 plugins** · **249 tools** · [Browse the registry](registry.json)
+> **28 plugins** · **316 tools** · [Browse the registry](registry.json)
 
 ### DeFi & Trading
 
 | Plugin | Description | Tools | Author |
 |--------|-------------|:-----:|--------|
-| [ton-trading-bot](plugins/ton-trading-bot/) | Atomic TON trading tools — market data, portfolio, risk validation, simulation, DEX swap | 22 | xlabtg |
+| [ton-trading-bot](plugins/ton-trading-bot/) | Atomic TON trading tools — market data, portfolio, risk validation, simulation, DEX swap | 41 | xlabtg |
 | [gaspump](plugins/gaspump/) | Launch, trade, and manage meme tokens on Gas111/TON | 13 | teleton |
 | [stormtrade](plugins/stormtrade/) | Perpetual futures — crypto, stocks, forex, commodities | 13 | teleton |
 | [evaa](plugins/evaa/) | EVAA Protocol — supply, borrow, withdraw, repay, liquidate | 11 | teleton |

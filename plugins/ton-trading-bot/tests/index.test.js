@@ -150,10 +150,18 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(Array.isArray(toolList));
     });
 
-    it("exports exactly 38 tools", () => {
+    it("exports exactly 41 tools", () => {
       const sdk = makeSdk();
       const toolList = mod.tools(sdk);
-      assert.equal(toolList.length, 38);
+      assert.equal(toolList.length, 41);
+    });
+
+    it("exports position management tools documented in issue #144", () => {
+      const sdk = makeSdk();
+      const toolNames = mod.tools(sdk).map((t) => t.name);
+      assert.ok(toolNames.includes("ton_trading_get_open_positions"));
+      assert.ok(toolNames.includes("ton_trading_close_position"));
+      assert.ok(toolNames.includes("ton_trading_close_all_positions"));
     });
 
     it("all tools have name, description, and execute", () => {
@@ -809,6 +817,217 @@ describe("ton-trading-bot plugin", () => {
         `pnl_percent should be ~-0.08%, got ${result.data.pnl_percent}`
       );
       assert.equal(result.data.profit_or_loss, "loss");
+    });
+  });
+
+  // ── Position management tools (issue #144) ────────────────────────────────
+  describe("position management tools", () => {
+    it("lists open positions filtered by mode", async () => {
+      const openTrades = [
+        {
+          id: 20,
+          timestamp: 1710000000000,
+          mode: "simulation",
+          from_asset: "TON",
+          to_asset: "EQToken",
+          amount_in: 10,
+          amount_out: 25,
+          entry_price_usd: 2,
+          status: "open",
+          note: "test position",
+        },
+      ];
+      let capturedSql = null;
+      let capturedArgs = null;
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => null,
+            all: (...args) => {
+              capturedSql = sql;
+              capturedArgs = args;
+              return openTrades;
+            },
+            run: () => ({ lastInsertRowid: 1 }),
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_open_positions");
+      const result = await tool.execute({ mode: "simulation" }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.count, 1);
+      assert.equal(result.data.positions[0].trade_id, 20);
+      assert.equal(result.data.positions[0].mode, "simulation");
+      assert.ok(capturedSql.includes("status = 'open'"));
+      assert.deepEqual(capturedArgs, ["simulation", 50]);
+    });
+
+    it("closes a simulation position using the reverse DEX quote", async () => {
+      const openTrade = {
+        id: 21,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: 25,
+        entry_price_usd: null,
+        status: "open",
+      };
+      let updatedTradeArgs = null;
+      let savedBalance = null;
+      let closedRulesForTrade = null;
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 3.5, source: "mock", timestamp: Date.now() }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async (params) => {
+              assert.equal(params.fromAsset, "EQToken");
+              assert.equal(params.toAsset, "TON");
+              assert.equal(params.amount, 25);
+              return { stonfi: { output: "12", price: "12" }, recommended: "stonfi" };
+            },
+            swap: async () => ({ expectedOutput: "12", dex: "stonfi" }),
+          },
+        },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 90 };
+              if (sql.includes("trade_journal") && sql.includes("WHERE id")) return openTrade;
+              return null;
+            },
+            all: () => [],
+            run: (...args) => {
+              if (sql.includes("UPDATE trade_journal")) updatedTradeArgs = args;
+              if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
+              if (sql.includes("UPDATE stop_loss_rules")) closedRulesForTrade = args[0];
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_position");
+      const result = await tool.execute({ trade_id: 21, mode: "simulation" }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.trade_id, 21);
+      assert.equal(result.data.close.amount_out, 12);
+      assert.equal(result.data.status, "closed");
+      assert.ok(updatedTradeArgs !== null, "trade journal should be updated");
+      assert.equal(savedBalance, 102, "simulation balance should receive the closing output");
+      assert.equal(closedRulesForTrade, 21, "active risk rules should be deactivated");
+    });
+
+    it("rejects close_position when the requested mode does not match the trade", async () => {
+      const sdk = makeSdk({
+        dbRows: {
+          trade: {
+            id: 22,
+            mode: "real",
+            from_asset: "TON",
+            to_asset: "EQToken",
+            amount_in: 10,
+            amount_out: 25,
+            status: "open",
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_position");
+      const result = await tool.execute({ trade_id: 22, mode: "simulation" }, makeContext());
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("mode"));
+    });
+
+    it("closes a real position by submitting the reverse DEX swap", async () => {
+      const openTrade = {
+        id: 23,
+        mode: "real",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: 25,
+        entry_price_usd: 2,
+        status: "open",
+      };
+      let swapParams = null;
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 2.2, source: "mock", timestamp: Date.now() }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "11", price: "11" }, recommended: "stonfi" }),
+            swap: async (params) => {
+              swapParams = params;
+              return { expectedOutput: "11", minOutput: "10.5", dex: "stonfi" };
+            },
+          },
+        },
+        dbRows: { trade: openTrade },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_position");
+      const result = await tool.execute(
+        { trade_id: 23, mode: "real", slippage: 0.02, dex: "stonfi" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.deepEqual(swapParams, {
+        fromAsset: "EQToken",
+        toAsset: "TON",
+        amount: 25,
+        slippage: 0.02,
+        dex: "stonfi",
+      });
+      assert.equal(result.data.close.amount_out, 11);
+      assert.equal(result.data.close.dex, "stonfi");
+    });
+
+    it("closes all open positions for the selected mode", async () => {
+      const openTrades = [
+        { id: 24, mode: "simulation", from_asset: "TON", to_asset: "EQTokenA", amount_in: 5, amount_out: 8, status: "open" },
+        { id: 25, mode: "simulation", from_asset: "TON", to_asset: "EQTokenB", amount_in: 6, amount_out: 9, status: "open" },
+      ];
+      let updatedCount = 0;
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 3.5, source: "mock", timestamp: Date.now() }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async (params) => ({
+              stonfi: { output: String(params.amount + 1), price: String(params.amount + 1) },
+              recommended: "stonfi",
+            }),
+            swap: async () => ({ expectedOutput: "1", dex: "stonfi" }),
+          },
+        },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => {
+              if (sql.includes("sim_balance")) return { balance: 100 };
+              return null;
+            },
+            all: () => openTrades,
+            run: () => {
+              if (sql.includes("UPDATE trade_journal")) updatedCount += 1;
+              return { lastInsertRowid: 1 };
+            },
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_all_positions");
+      const result = await tool.execute({ mode: "simulation" }, makeContext());
+      assert.equal(result.success, true);
+      assert.equal(result.data.closed_count, 2);
+      assert.equal(result.data.failed_count, 0);
+      assert.equal(updatedCount, 2);
     });
   });
 

@@ -8,6 +8,9 @@
  *   - ton_trading_simulate_trade           — paper-trade without real money
  *   - ton_trading_execute_swap             — execute real swap on TON DEX (DM-only)
  *   - ton_trading_record_trade             — record a closed trade and update PnL
+ *   - ton_trading_get_open_positions       — list open real or simulation positions
+ *   - ton_trading_close_position           — close one open position by trade ID
+ *   - ton_trading_close_all_positions      — close all open positions for a mode
  *
  * Algorithmic trading tools (P0 — highest priority):
  *   - ton_trading_get_arbitrage_opportunities — find cross-DEX price differences
@@ -75,7 +78,7 @@
 
 export const manifest = {
   name: "ton-trading-bot",
-  version: "2.1.0",
+  version: "2.2.0",
   sdkVersion: ">=1.0.0",
   description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation. The LLM composes these into trading strategies.",
   defaultConfig: {
@@ -175,6 +178,252 @@ function setSimBalance(sdk, balance) {
   sdk.db
     .prepare("INSERT INTO sim_balance (timestamp, balance) VALUES (?, ?)")
     .run(Date.now(), balance);
+}
+
+function toFiniteNumber(value) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function getDexOutput(result, preferredDex) {
+  if (!result || typeof result !== "object") return null;
+
+  const direct = toFiniteNumber(
+    result.expectedOutput ??
+    result.output ??
+    result.amountOut ??
+    result.amount_out ??
+    result.receivedAmount ??
+    result.received_amount
+  );
+  if (direct != null) return direct;
+
+  const candidates = [];
+  if (preferredDex && result[preferredDex]) candidates.push(result[preferredDex]);
+  if (typeof result.recommended === "string" && result[result.recommended]) {
+    candidates.push(result[result.recommended]);
+  } else if (result.recommended && typeof result.recommended === "object") {
+    candidates.push(result.recommended);
+  }
+  candidates.push(result.stonfi, result.dedust, result.tonco, result.swapcoffee);
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const output = toFiniteNumber(
+      candidate.expectedOutput ??
+      candidate.output ??
+      candidate.amountOut ??
+      candidate.amount_out ??
+      candidate.receivedAmount ??
+      candidate.received_amount ??
+      candidate.price
+    );
+    if (output != null) return output;
+  }
+
+  return null;
+}
+
+function getDexName(result, preferredDex) {
+  if (result?.dex) return result.dex;
+  if (preferredDex) return preferredDex;
+  if (typeof result?.recommended === "string") return result.recommended;
+  return "auto";
+}
+
+function formatOpenPosition(trade) {
+  return {
+    trade_id: trade.id,
+    mode: trade.mode,
+    from_asset: trade.from_asset,
+    to_asset: trade.to_asset,
+    amount_in: trade.amount_in,
+    expected_amount_out: trade.amount_out ?? null,
+    entry_price_usd: trade.entry_price_usd ?? null,
+    opened_at: trade.timestamp,
+    note: trade.note ?? null,
+  };
+}
+
+async function inferExitPriceUsd(sdk, fromAsset, explicitExitPriceUsd) {
+  const explicit = toFiniteNumber(explicitExitPriceUsd);
+  if (explicit != null) return explicit;
+
+  if (fromAsset !== "TON") return null;
+  const tonPrice = await sdk.ton.getPrice().catch(() => null);
+  return toFiniteNumber(tonPrice?.usd);
+}
+
+function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
+  const amountIn = toFiniteNumber(entry.amount_in) ?? 0;
+  const amountOutNumber = toFiniteNumber(amountOut);
+  const entryPriceUsd = toFiniteNumber(entry.entry_price_usd);
+  const exitPrice = toFiniteNumber(exitPriceUsd);
+
+  if (amountOutNumber == null) {
+    return { success: false, error: "Closing amount_out is required to record P&L" };
+  }
+
+  const usdIn = entryPriceUsd != null ? amountIn * entryPriceUsd : amountIn;
+  const usdOut = exitPrice != null ? amountIn * exitPrice : amountOutNumber;
+
+  const pnl = usdOut - usdIn;
+  const pnlPercent = usdIn > 0 ? (pnl / usdIn) * 100 : 0;
+
+  sdk.db
+    .prepare(
+      `UPDATE trade_journal
+       SET amount_out = ?, exit_price_usd = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
+       WHERE id = ?`
+    )
+    .run(amountOutNumber, exitPrice ?? null, pnl, pnlPercent, note ?? null, entry.id);
+
+  if (entry.mode === "simulation" && entry.from_asset === "TON") {
+    const simBalance = getSimBalance(sdk);
+    const exitTonPriceUsd = exitPrice ?? entryPriceUsd ?? null;
+    const creditTon =
+      exitTonPriceUsd != null
+        ? amountIn + pnl / exitTonPriceUsd
+        : amountOutNumber;
+    setSimBalance(sdk, simBalance + creditTon);
+  }
+
+  try {
+    sdk.db
+      .prepare("UPDATE stop_loss_rules SET status = 'cancelled' WHERE trade_id = ? AND status = 'active'")
+      .run(entry.id);
+  } catch {
+    // Older or minimal test databases may not include stop-loss rules.
+  }
+
+  return {
+    success: true,
+    data: {
+      trade_id: entry.id,
+      amount_in: amountIn,
+      amount_out: amountOutNumber,
+      pnl: parseFloat(pnl.toFixed(6)),
+      pnl_percent: parseFloat(pnlPercent.toFixed(2)),
+      profit_or_loss: pnl >= 0 ? "profit" : "loss",
+      mode: entry.mode,
+      status: "closed",
+    },
+  };
+}
+
+async function closeOpenPosition(sdk, entry, params, context) {
+  const { slippage = sdk.pluginConfig.defaultSlippage ?? 0.05, dex, note } = params;
+  const closeAmount = toFiniteNumber(params.amount ?? entry.amount_out);
+
+  if (entry.status === "closed") {
+    return { success: false, error: `Trade ${entry.id} is already closed` };
+  }
+
+  if (closeAmount == null || closeAmount <= 0) {
+    return {
+      success: false,
+      error: `Trade ${entry.id} has no recorded output amount to close; provide amount explicitly`,
+    };
+  }
+
+  const closeSwapParams = {
+    fromAsset: entry.to_asset,
+    toAsset: entry.from_asset,
+    amount: closeAmount,
+    ...(slippage != null ? { slippage } : {}),
+    ...(dex ? { dex } : {}),
+  };
+  const shouldUseExitPrice = params.exit_price_usd != null || entry.entry_price_usd != null;
+  const exitPriceUsd = shouldUseExitPrice
+    ? await inferExitPriceUsd(sdk, entry.from_asset, params.exit_price_usd)
+    : null;
+
+  let closeAmountOut = null;
+  let closeDex = dex ?? null;
+  let minOutput = null;
+
+  if (entry.mode === "simulation") {
+    if (entry.to_asset === entry.from_asset) {
+      closeAmountOut = closeAmount;
+      closeDex = "none";
+    } else {
+      const quote = await sdk.ton.dex.quote({
+        fromAsset: entry.to_asset,
+        toAsset: entry.from_asset,
+        amount: closeAmount,
+      });
+      closeAmountOut = getDexOutput(quote, dex);
+      closeDex = getDexName(quote, dex);
+    }
+  } else {
+    const walletAddress = sdk.ton.getAddress();
+    if (!walletAddress) {
+      return { success: false, error: "Wallet not initialized" };
+    }
+
+    const quote = await sdk.ton.dex.quote({
+      fromAsset: entry.to_asset,
+      toAsset: entry.from_asset,
+      amount: closeAmount,
+    }).catch((err) => {
+      sdk.log.warn(`Reverse close quote failed for trade #${entry.id}: ${err.message}`);
+      return null;
+    });
+
+    const swapResult = await sdk.ton.dex.swap(closeSwapParams);
+    minOutput = toFiniteNumber(swapResult?.minOutput);
+    closeAmountOut = getDexOutput(swapResult, dex) ?? getDexOutput(quote, dex) ?? minOutput;
+    closeDex = getDexName(swapResult, dex);
+
+    try {
+      await sdk.telegram.sendMessage(
+        context.chatId,
+        `Close submitted for trade #${entry.id}: ${closeAmount} ${entry.to_asset} → ${entry.from_asset}\nExpected output: ${closeAmountOut ?? "unknown"}\nAllow ~30 seconds for on-chain confirmation.`
+      );
+    } catch (msgErr) {
+      if (msgErr.name === "PluginSDKError") {
+        sdk.log.warn(`Could not send close confirmation message: ${msgErr.code}: ${msgErr.message}`);
+      } else {
+        sdk.log.warn(`Could not send close confirmation message: ${msgErr.message}`);
+      }
+    }
+  }
+
+  if (closeAmountOut == null) {
+    return { success: false, error: `Could not determine close output for trade ${entry.id}` };
+  }
+
+  const closeResult = closeTradeJournalEntry(
+    sdk,
+    entry,
+    closeAmountOut,
+    exitPriceUsd,
+    note ?? "closed by ton_trading_close_position"
+  );
+
+  if (!closeResult.success) return closeResult;
+
+  sdk.log.info(
+    `Position #${entry.id} closed: ${closeAmount} ${entry.to_asset} → ${closeAmountOut} ${entry.from_asset}`
+  );
+
+  return {
+    success: true,
+    data: {
+      ...closeResult.data,
+      original_position: formatOpenPosition(entry),
+      close: {
+        from_asset: entry.to_asset,
+        to_asset: entry.from_asset,
+        amount_in: closeAmount,
+        amount_out: closeAmountOut,
+        exit_price_usd: exitPriceUsd,
+        slippage: entry.mode === "real" ? slippage : null,
+        dex: closeDex,
+        min_output: minOutput,
+      },
+    },
+  };
 }
 
 // ─── Tools ───────────────────────────────────────────────────────────────────
@@ -642,62 +891,226 @@ export const tools = (sdk) => [
           return { success: false, error: `Trade ${trade_id} is already closed` };
         }
 
-        // Calculate P&L in USD using the from_asset prices at entry and exit.
-        // Both entry_price_usd and exit_price_usd represent the USD price of from_asset
-        // (the asset that was sold), so P&L = amount_in × (exit_price - entry_price).
-        // Example: 10 TON at entry $1.240, exit $1.249 → pnl = 10 × (1.249 - 1.240) = +$0.09
-        // Fallback (no prices): use raw amounts directly (same-asset trade, e.g. TON→TON).
-        const usdIn = entry.entry_price_usd != null ? entry.amount_in * entry.entry_price_usd : entry.amount_in;
-        const usdOut = exit_price_usd != null ? entry.amount_in * exit_price_usd : amount_out;
-
-        const pnl = usdOut - usdIn;
-        const pnlPercent =
-          usdIn > 0 ? (pnl / usdIn) * 100 : 0;
-
-        sdk.db
-          .prepare(
-            `UPDATE trade_journal
-             SET amount_out = ?, exit_price_usd = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
-             WHERE id = ?`
-          )
-          .run(amount_out, exit_price_usd ?? null, pnl, pnlPercent, note ?? null, trade_id);
-
-        // If simulation trade was opened with TON, credit back principal + profit/loss in TON.
-        // The balance was decremented by amount_in (TON) on open; on close we restore it.
-        // When USD prices are available the pnl is in USD — convert back to TON using
-        // the exit price (USD price of TON at trade close).  Using the exit price correctly
-        // reflects how much TON the USD profit buys at the current market rate.
-        // Example: pnl=$1.995 at exit $1.393/TON → 1.432 TON added (not 1.583 with entry $1.26).
-        // When no prices were provided (same-asset TON→TON trade) the raw amount_out is in TON.
-        if (entry.mode === "simulation" && entry.from_asset === "TON") {
-          const simBalance = getSimBalance(sdk);
-          const exitTonPriceUsd = exit_price_usd ?? entry.entry_price_usd ?? null;
-          const creditTon =
-            exitTonPriceUsd != null
-              ? entry.amount_in + pnl / exitTonPriceUsd
-              : amount_out; // same-currency (TON→TON): just return what came out
-          setSimBalance(sdk, simBalance + creditTon);
-        }
+        const closeResult = closeTradeJournalEntry(sdk, entry, amount_out, exit_price_usd, note);
+        if (!closeResult.success) return closeResult;
 
         sdk.log.info(
-          `Trade #${trade_id} closed: PnL ${pnl >= 0 ? "+" : ""}${pnl.toFixed(4)} (${pnlPercent.toFixed(2)}%)`
+          `Trade #${trade_id} closed: PnL ${closeResult.data.pnl >= 0 ? "+" : ""}${closeResult.data.pnl.toFixed(4)} (${closeResult.data.pnl_percent.toFixed(2)}%)`
         );
+
+        return closeResult;
+      } catch (err) {
+        sdk.log.error(`ton_trading_record_trade failed: ${err.message}`);
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Position Management: ton_trading_get_open_positions ───────────────────
+  {
+    name: "ton_trading_get_open_positions",
+    description:
+      "Get open trading positions from the journal, filtered by real or simulation mode. Use this before deciding which positions to close.",
+    category: "data-bearing",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          description: 'Include "real", "simulation", or "all" open positions (default "all")',
+          enum: ["real", "simulation", "all"],
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of open positions to return (1-100, default 50)",
+          minimum: 1,
+          maximum: 100,
+        },
+      },
+    },
+    execute: async (params, _context) => {
+      const { mode = "all" } = params;
+      const requestedLimit = Number.parseInt(params.limit ?? 50, 10);
+      const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 50, 1), 100);
+
+      try {
+        const modeClause = mode === "all" ? "" : "AND mode = ?";
+        const args = mode === "all" ? [limit] : [mode, limit];
+        const openTrades = sdk.db
+          .prepare(`SELECT * FROM trade_journal WHERE status = 'open' ${modeClause} ORDER BY timestamp DESC LIMIT ?`)
+          .all(...args);
 
         return {
           success: true,
           data: {
-            trade_id,
-            amount_in: entry.amount_in,
-            amount_out,
-            pnl: parseFloat(pnl.toFixed(6)),
-            pnl_percent: parseFloat(pnlPercent.toFixed(2)),
-            profit_or_loss: pnl >= 0 ? "profit" : "loss",
-            mode: entry.mode,
-            status: "closed",
+            mode,
+            count: openTrades.length,
+            positions: openTrades.map(formatOpenPosition),
           },
         };
       } catch (err) {
-        sdk.log.error(`ton_trading_record_trade failed: ${err.message}`);
+        sdk.log.error(`ton_trading_get_open_positions failed: ${err.message}`);
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Position Management: ton_trading_close_position ────────────────────────
+  {
+    name: "ton_trading_close_position",
+    description:
+      "Close a specific open position by trade ID. Simulation mode uses a reverse DEX quote; real mode submits a reverse DEX swap and then closes the journal entry.",
+    category: "action",
+    scope: "dm-only",
+    parameters: {
+      type: "object",
+      properties: {
+        trade_id: {
+          type: "integer",
+          description: "Open journal trade ID to close",
+        },
+        mode: {
+          type: "string",
+          description: 'Expected mode for the trade: "real" or "simulation". Required to prevent accidental real closes.',
+          enum: ["real", "simulation"],
+        },
+        amount: {
+          type: "number",
+          description: "Optional override for the amount of the acquired asset to sell when closing. Defaults to the trade's recorded amount_out.",
+        },
+        slippage: {
+          type: "number",
+          description: "Slippage tolerance for real close swaps (default: plugin config, typically 0.05)",
+          minimum: 0.001,
+          maximum: 0.5,
+        },
+        dex: {
+          type: "string",
+          description: 'Preferred DEX for real close swaps: "stonfi" or "dedust"',
+          enum: ["stonfi", "dedust"],
+        },
+        exit_price_usd: {
+          type: "number",
+          description: "USD price of the original from_asset at close. If omitted for TON positions, the current TON/USD price is used when available.",
+        },
+        note: {
+          type: "string",
+          description: "Optional close note or reason",
+        },
+      },
+      required: ["trade_id", "mode"],
+    },
+    execute: async (params, context) => {
+      const { trade_id, mode } = params;
+      try {
+        const entry = sdk.db
+          .prepare("SELECT * FROM trade_journal WHERE id = ?")
+          .get(trade_id);
+
+        if (!entry) {
+          return { success: false, error: `Trade ${trade_id} not found` };
+        }
+
+        if (entry.mode !== mode) {
+          return {
+            success: false,
+            error: `Trade ${trade_id} mode is "${entry.mode}", but close_position was called with mode "${mode}"`,
+          };
+        }
+
+        return await closeOpenPosition(sdk, entry, params, context);
+      } catch (err) {
+        sdk.log.error(`ton_trading_close_position failed: ${err.message}`);
+        if (err.name === "PluginSDKError") {
+          return { success: false, error: `${err.code}: ${String(err.message).slice(0, 500)}` };
+        }
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Position Management: ton_trading_close_all_positions ───────────────────
+  {
+    name: "ton_trading_close_all_positions",
+    description:
+      "Close all open positions for the selected mode. Returns a per-position result so failed closes are visible and can be retried.",
+    category: "action",
+    scope: "dm-only",
+    parameters: {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          description: 'Close positions in "real" or "simulation" mode. Required to prevent accidental real closes.',
+          enum: ["real", "simulation"],
+        },
+        slippage: {
+          type: "number",
+          description: "Slippage tolerance for real close swaps (default: plugin config, typically 0.05)",
+          minimum: 0.001,
+          maximum: 0.5,
+        },
+        dex: {
+          type: "string",
+          description: 'Preferred DEX for real close swaps: "stonfi" or "dedust"',
+          enum: ["stonfi", "dedust"],
+        },
+        exit_price_usd: {
+          type: "number",
+          description: "USD price of the original from_asset at close. Applies to all matching positions when provided.",
+        },
+        note: {
+          type: "string",
+          description: "Optional close note or reason applied to every closed position",
+        },
+      },
+      required: ["mode"],
+    },
+    execute: async (params, context) => {
+      const { mode } = params;
+      try {
+        const openTrades = sdk.db
+          .prepare("SELECT * FROM trade_journal WHERE status = 'open' AND mode = ? ORDER BY timestamp DESC")
+          .all(mode);
+
+        const closed = [];
+        const failures = [];
+
+        for (const entry of openTrades) {
+          const result = await closeOpenPosition(sdk, entry, params, context);
+          if (result.success) {
+            closed.push(result.data);
+          } else {
+            failures.push({
+              trade_id: entry.id,
+              error: result.error,
+            });
+          }
+        }
+
+        const data = {
+          mode,
+          requested_count: openTrades.length,
+          closed_count: closed.length,
+          failed_count: failures.length,
+          closed_positions: closed,
+          failures,
+        };
+
+        if (failures.length > 0) {
+          return {
+            success: false,
+            error: `Failed to close ${failures.length} of ${openTrades.length} open position(s)`,
+            data,
+          };
+        }
+
+        return { success: true, data };
+      } catch (err) {
+        sdk.log.error(`ton_trading_close_all_positions failed: ${err.message}`);
+        if (err.name === "PluginSDKError") {
+          return { success: false, error: `${err.code}: ${String(err.message).slice(0, 500)}` };
+        }
         return { success: false, error: String(err.message).slice(0, 500) };
       }
     },

@@ -1,7 +1,7 @@
 {
   "id": "ton-trading-bot",
   "name": "TON Trading Bot",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation.",
   "author": {
     "name": "xlabtg",
@@ -35,6 +35,18 @@
     {
       "name": "ton_trading_record_trade",
       "description": "Close an open trade in the journal and record final PnL"
+    },
+    {
+      "name": "ton_trading_get_open_positions",
+      "description": "List open real or simulation positions from the trade journal"
+    },
+    {
+      "name": "ton_trading_close_position",
+      "description": "Close a specific open position by trade ID using simulation quote or real reverse swap"
+    },
+    {
+      "name": "ton_trading_close_all_positions",
+      "description": "Close all open positions for a selected real or simulation mode"
     },
     {
       "name": "ton_trading_get_arbitrage_opportunities",
