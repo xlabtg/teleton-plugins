@@ -28,7 +28,7 @@ function makeSdk({ apiKey = "test-key", config = {} } = {}) {
       },
     },
     config: {
-      base_url: "https://backend.composio.dev/api/v3.1",
+      base_url: "https://backend.composio.dev/api/v3",
       timeout_ms: 3000,
       max_parallel_executions: 5,
       ...config,

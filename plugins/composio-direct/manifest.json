@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
   "author": {
     "name": "xlabtg",
@@ -19,7 +19,7 @@
     }
   },
   "defaultConfig": {
-    "base_url": "https://backend.composio.dev/api/v3.1",
+    "base_url": "https://backend.composio.dev/api/v3",
     "timeout_ms": 30000,
     "max_parallel_executions": 10,
     "tool_version": "latest",
@@ -27,9 +27,9 @@
     "auth_config_ids": {}
   },
   "tools": [
-    { "name": "composio_search_tools", "description": "Search for available Composio tools by query, toolkit name, or description" },
-    { "name": "composio_execute_tool", "description": "Execute a single Composio tool by its slug with given parameters" },
-    { "name": "composio_multi_execute", "description": "Execute multiple Composio tools in parallel or sequentially" },
+    { "name": "composio_search_tools", "description": "Search for Composio tool_slug values by query, toolkit name, or description" },
+    { "name": "composio_execute_tool", "description": "Execute a single Composio tool_slug with given parameters" },
+    { "name": "composio_multi_execute", "description": "Execute multiple Composio tool_slug values in parallel or sequentially" },
     { "name": "composio_auth_link", "description": "Get an OAuth authorization link for a Composio-connected service (GitHub, Gmail, Slack, etc.)" }
   ],
   "permissions": [],

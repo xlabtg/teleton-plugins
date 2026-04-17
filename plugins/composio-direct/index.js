@@ -13,7 +13,7 @@
  *
  * SDK integration:
  *   - Uses the official @composio/core npm SDK if it is available
- *   - Uses direct HTTP calls against Composio v3.1 when the SDK is unavailable
+ *   - Uses direct HTTP calls against Composio v3 when the SDK is unavailable
  *
  * Security:
  *   - API keys and OAuth tokens are never logged
@@ -60,9 +60,16 @@ async function loadComposioSdk() {
  */
 const composioSdkCache = new Map();
 
-const DEFAULT_BASE_URL = "https://backend.composio.dev/api/v3.1";
+const DEFAULT_BASE_URL = "https://backend.composio.dev/api/v3";
 const DEFAULT_TOOL_VERSION = "latest";
 const DEFAULT_TOOLKIT_VERSIONS = "latest";
+const COMPOSIO_EXECUTION_GUIDANCE = {
+  tool: "composio_execute_tool",
+  tool_slug_param: "tool_slug",
+  parameters_param: "parameters",
+  instruction:
+    "Do not call returned tool_slug values directly. To run a Composio result, call composio_execute_tool with { tool_slug, parameters }.",
+};
 
 /**
  * Get (or create) a Composio SDK instance for the given API key.
@@ -91,7 +98,7 @@ async function getComposioSdk(apiKey) {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.5.0",
+  version: "1.6.0",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
@@ -356,20 +363,25 @@ function formatTool(item, includeParams) {
     ? (item.toolkit.slug ?? item.toolkit.name ?? "")
     : (item.toolkit_slug ?? item.toolkit ?? item.appKey ?? item.app ?? "");
   const slug = item.slug ?? item.name ?? item.id;
+  const toolSlug = String(slug ?? "");
   const authRequired =
     item.no_auth === true
       ? false
       : (item.requiresAuth ?? item.auth_required ?? item.authRequired ?? true);
 
   const tool = {
-    name: slug,
-    slug,
-    display_name: item.name ?? slug,
+    tool_slug: toolSlug,
+    display_name: item.display_name ?? item.name ?? toolSlug,
     description: item.description ?? item.human_description ?? "",
     toolkit,
     auth_required: Boolean(authRequired),
     version: item.version ?? null,
     tags: item.tags ?? [],
+    execute_with: {
+      tool: COMPOSIO_EXECUTION_GUIDANCE.tool,
+      tool_slug: toolSlug,
+      parameters_param: COMPOSIO_EXECUTION_GUIDANCE.parameters_param,
+    },
   };
 
   if (includeParams) {
@@ -386,6 +398,37 @@ function formatTool(item, includeParams) {
   }
 
   return tool;
+}
+
+/**
+ * Detect whether Composio could not resolve a tool slug.
+ * @param {{ status: number; data: unknown }} response
+ * @returns {boolean}
+ */
+function isUnknownToolError(response) {
+  const message = getComposioMessage(response.data).toLowerCase();
+  if (message.includes("unknown tool")) return true;
+  if (message.includes("tool") && message.includes("not found")) return true;
+  if (isRecord(response.data) && isRecord(response.data.error)) {
+    const slug = String(response.data.error.slug ?? "").toLowerCase();
+    if (slug.includes("tool") && (slug.includes("not_found") || slug.includes("unknown"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Current Composio docs use /api/v3. Retry the current route when a user still
+ * has the old v3.1 base URL configured and that route reports an unknown tool.
+ * @param {string} baseUrl
+ * @returns {string | null}
+ */
+function getCurrentV3FallbackBaseUrl(baseUrl) {
+  if (/\/api\/v3\.1$/i.test(baseUrl)) {
+    return baseUrl.replace(/\/api\/v3\.1$/i, "/api/v3");
+  }
+  return null;
 }
 
 /**
@@ -565,6 +608,7 @@ export const tools = (sdk) => {
     description:
       "Search for available Composio tools by query, toolkit name, or description. " +
       "Use this before executing a tool to discover its exact slug and parameters. " +
+      "Returned tool_slug values are not Teleton tools; execute them with composio_execute_tool. " +
       "Supports filtering by toolkit (e.g. github, gmail, slack, notion, linear, jira).",
     category: "data-bearing",
 
@@ -608,7 +652,7 @@ export const tools = (sdk) => {
         sdk.log.debug(`composio_search_tools: using @composio/core SDK`);
         try {
           const query = {};
-          if (params.query) query.search = params.query;
+          if (params.query) query.query = params.query;
           if (params.toolkit) query.toolkits = [normalizeToolkitSlug(params.toolkit)];
           query.limit = limit;
           if (toolkitVersions) query.toolkitVersions = toolkitVersions;
@@ -622,16 +666,20 @@ export const tools = (sdk) => {
           const tools = rawItems.map((item) => formatTool(item, includeParams));
 
           sdk.log.info(`composio_search_tools: found ${tools.length} tools (SDK)`);
-          return {
-            success: true,
-            data: {
-              tools,
-              count: tools.length,
-              query: params.query ?? null,
-              toolkit: params.toolkit ?? null,
-              total_available: toolList?.total ?? tools.length,
-            },
-          };
+          if (tools.length > 0 || (!params.query && !params.toolkit)) {
+            return {
+              success: true,
+              data: {
+                tools,
+                count: tools.length,
+                query: params.query ?? null,
+                toolkit: params.toolkit ?? null,
+                total_available: toolList?.total ?? tools.length,
+                execution: COMPOSIO_EXECUTION_GUIDANCE,
+              },
+            };
+          }
+          sdk.log.debug(`composio_search_tools: SDK returned 0 tools, falling back to HTTP`);
         } catch (err) {
           sdk.log.debug(`composio_search_tools: SDK error — ${formatApiError(err)}, falling back to HTTP`);
           // fall through to HTTP path
@@ -640,7 +688,7 @@ export const tools = (sdk) => {
 
       // --- HTTP fallback path ---
       const qs = new URLSearchParams();
-      if (params.query) qs.set("search", params.query);
+      if (params.query) qs.set("query", params.query);
       if (params.toolkit) qs.set("toolkit_slug", normalizeToolkitSlug(params.toolkit));
       qs.set("limit", String(limit));
       qs.set("include_deprecated", "false");
@@ -683,6 +731,7 @@ export const tools = (sdk) => {
             toolkit: params.toolkit ?? null,
             total_available: rawData?.total_items ?? rawData?.totalItems ?? rawData?.total ?? null,
             next_cursor: rawData?.next_cursor ?? null,
+            execution: COMPOSIO_EXECUTION_GUIDANCE,
           },
         };
       } catch (err) {
@@ -701,7 +750,7 @@ export const tools = (sdk) => {
     description:
       "Execute a single Composio tool by its slug (e.g. 'github_create_issue'). " +
       "If the service is not authorized, returns a structured auth error with a connect_url. " +
-      "Use composio_search_tools first to discover available tool slugs.",
+      "Use composio_search_tools first to discover available tool_slug values, then call this tool instead of calling the returned slug directly.",
     category: "action",
     scope: "dm-only",
 
@@ -825,7 +874,7 @@ export const tools = (sdk) => {
 
       // --- HTTP fallback path ---
       const effectiveTimeout = params.timeout_override_ms ?? timeoutMs;
-      const url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
+      let url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
 
       sdk.log.debug(`composio_execute_tool: POST ${normalizedSlug} via HTTP (timeout=${effectiveTimeout}ms)`);
 
@@ -842,7 +891,7 @@ export const tools = (sdk) => {
       }
 
       try {
-        const response = await fetchWithRetry({
+        let response = await fetchWithRetry({
           url,
           method: "POST",
           headers: buildHeaders(apiKey),
@@ -850,6 +899,19 @@ export const tools = (sdk) => {
           timeoutMs: effectiveTimeout,
           log: sdk.log,
         });
+        const fallbackBaseUrl = getCurrentV3FallbackBaseUrl(baseUrl);
+        if (fallbackBaseUrl && isUnknownToolError(response)) {
+          url = `${fallbackBaseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
+          sdk.log.debug(`composio_execute_tool: retrying ${normalizedSlug} on current v3 API`);
+          response = await fetchWithRetry({
+            url,
+            method: "POST",
+            headers: buildHeaders(apiKey),
+            body,
+            timeoutMs: effectiveTimeout,
+            log: sdk.log,
+          });
+        }
 
         if (isAuthError(response)) {
           const service = extractServiceFromSlug(params.tool_slug);
@@ -899,6 +961,7 @@ export const tools = (sdk) => {
     name: "composio_multi_execute",
     description:
       "Execute multiple Composio tools in parallel. " +
+      "Each execution uses a Composio tool_slug discovered by composio_search_tools; do not call returned slugs as Teleton tools. " +
       "Returns results in the same order as the input executions array. " +
       "Use fail_fast=true to stop on the first error. " +
       "Results include individual success/error status for each tool.",
@@ -1084,7 +1147,7 @@ export const tools = (sdk) => {
           // --- HTTP fallback path ---
           const normalizedSlug = normalizeToolSlug(exec.tool_slug);
           const effectiveTimeout = exec.timeout_override_ms ?? timeoutMs;
-          const url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
+          let url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
 
           const execArguments = exec.connected_account_id
             ? { ...exec.parameters, connected_account_id: exec.connected_account_id }
@@ -1099,7 +1162,7 @@ export const tools = (sdk) => {
           }
 
           try {
-            const response = await fetchWithRetry({
+            let response = await fetchWithRetry({
               url,
               method: "POST",
               headers: buildHeaders(apiKey),
@@ -1107,6 +1170,19 @@ export const tools = (sdk) => {
               timeoutMs: effectiveTimeout,
               log: sdk.log,
             });
+            const fallbackBaseUrl = getCurrentV3FallbackBaseUrl(baseUrl);
+            if (fallbackBaseUrl && isUnknownToolError(response)) {
+              url = `${fallbackBaseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
+              sdk.log.debug(`composio_multi_execute: retrying ${normalizedSlug} on current v3 API`);
+              response = await fetchWithRetry({
+                url,
+                method: "POST",
+                headers: buildHeaders(apiKey),
+                body,
+                timeoutMs: effectiveTimeout,
+                log: sdk.log,
+              });
+            }
 
             if (isAuthError(response)) {
               const service = extractServiceFromSlug(exec.tool_slug);

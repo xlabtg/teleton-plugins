@@ -14,7 +14,7 @@ function makeSdk({ apiKey = "test-api-key", pluginConfig = {} } = {}) {
       },
     },
     pluginConfig: {
-      base_url: "https://backend.composio.dev/api/v3.1",
+      base_url: "https://backend.composio.dev/api/v3",
       timeout_ms: 1000,
       max_parallel_executions: 5,
       tool_version: "latest",
@@ -62,8 +62,8 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.5.0");
-    assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3.1");
+    assert.equal(manifest.version, "1.6.0");
+    assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3");
     assert.equal(toolList.length, 4);
     assert.deepEqual(
       toolList.map((tool) => tool.name).sort(),
@@ -96,7 +96,7 @@ describe("composio-direct Teleton integration", () => {
     }));
 
     try {
-      const sdk = makeSdk({ pluginConfig: { base_url: "https://example.test/api/v3.1" } });
+      const sdk = makeSdk({ pluginConfig: { base_url: "https://example.test/api/v3" } });
       const searchTool = toolsFactory(sdk).find((tool) => tool.name === "composio_search_tools");
       const result = await searchTool.execute(
         { query: "create issue", toolkit: "github", limit: 5, include_params: true },
@@ -105,14 +105,19 @@ describe("composio-direct Teleton integration", () => {
 
       assert.equal(result.success, true);
       assert.equal(result.data.count, 1);
-      assert.equal(result.data.tools[0].slug, "GITHUB_CREATE_ISSUE");
+      assert.equal(result.data.execution.tool, "composio_execute_tool");
+      assert.match(result.data.execution.instruction, /Do not call returned tool_slug values directly/);
+      assert.equal(result.data.tools[0].tool_slug, "GITHUB_CREATE_ISSUE");
+      assert.equal(Object.hasOwn(result.data.tools[0], "name"), false);
+      assert.equal(result.data.tools[0].execute_with.tool, "composio_execute_tool");
       assert.deepEqual(result.data.tools[0].parameters_schema, {
         owner: { type: "string", required: true },
       });
 
       const url = new URL(calls[0].url);
-      assert.equal(url.origin + url.pathname, "https://example.test/api/v3.1/tools");
-      assert.equal(url.searchParams.get("search"), "create issue");
+      assert.equal(url.origin + url.pathname, "https://example.test/api/v3/tools");
+      assert.equal(url.searchParams.get("query"), "create issue");
+      assert.equal(url.searchParams.has("search"), false);
       assert.equal(url.searchParams.get("toolkit_slug"), "github");
       assert.equal(url.searchParams.get("toolkit_versions"), "latest");
       assert.equal(url.searchParams.get("limit"), "5");
@@ -121,7 +126,7 @@ describe("composio-direct Teleton integration", () => {
     }
   });
 
-  it("sends 'search' (not 'query') to Composio /tools endpoint", async () => {
+  it("sends current 'query' parameter to Composio /tools endpoint", async () => {
     const { calls, restore } = mockFetch(() => ({
       status: 200,
       data: { items: [], total_items: 0 },
@@ -132,8 +137,8 @@ describe("composio-direct Teleton integration", () => {
       await searchTool.execute({ query: "coinmarketcap" }, makeContext());
 
       const url = new URL(calls[0].url);
-      assert.equal(url.searchParams.get("search"), "coinmarketcap");
-      assert.equal(url.searchParams.has("query"), false);
+      assert.equal(url.searchParams.get("query"), "coinmarketcap");
+      assert.equal(url.searchParams.has("search"), false);
     } finally {
       restore();
     }
@@ -161,12 +166,54 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.data.log_id, "log_123");
 
       const url = new URL(calls[0].url);
-      assert.equal(url.pathname, "/api/v3.1/tools/execute/GITHUB_LIST_REPOS");
+      assert.equal(url.pathname, "/api/v3/tools/execute/GITHUB_LIST_REPOS");
       assert.deepEqual(calls[0].body, {
         user_id: "user-42",
         arguments: { owner: "xlabtg" },
         version: "latest",
       });
+    } finally {
+      restore();
+    }
+  });
+
+  it("retries current v3 execute API when legacy v3.1 reports unknown tool", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      if (idx === 1) {
+        return {
+          status: 404,
+          data: {
+            error: {
+              message: "Unknown tool",
+              slug: "UNKNOWN_TOOL",
+              status: 404,
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        data: {
+          successful: true,
+          data: { ok: true },
+        },
+      };
+    });
+
+    try {
+      const executeTool = toolsFactory(
+        makeSdk({ pluginConfig: { base_url: "https://backend.composio.dev/api/v3.1" } })
+      ).find((tool) => tool.name === "composio_execute_tool");
+      const result = await executeTool.execute(
+        { tool_slug: "github_list_repos", parameters: {} },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.ok, true);
+      assert.equal(calls.length, 2);
+      assert.equal(new URL(calls[0].url).pathname, "/api/v3.1/tools/execute/GITHUB_LIST_REPOS");
+      assert.equal(new URL(calls[1].url).pathname, "/api/v3/tools/execute/GITHUB_LIST_REPOS");
     } finally {
       restore();
     }

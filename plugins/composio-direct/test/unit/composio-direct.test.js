@@ -29,7 +29,7 @@ function makeSdk({ apiKey = "test-api-key", config = {} } = {}) {
       },
     },
     config: {
-      base_url: "https://backend.composio.dev/api/v3.1",
+      base_url: "https://backend.composio.dev/api/v3",
       timeout_ms: 5000,
       max_parallel_executions: 10,
       ...config,
@@ -95,7 +95,8 @@ describe("manifest", () => {
     assert.ok(manifest.name, "manifest.name is set");
     assert.ok(manifest.version, "manifest.version is set");
     assert.ok(manifest.secrets?.composio_api_key, "secret composio_api_key declared");
-    assert.ok(manifest.defaultConfig?.base_url, "defaultConfig.base_url set");
+    assert.equal(manifest.version, "1.6.0");
+    assert.equal(manifest.defaultConfig?.base_url, "https://backend.composio.dev/api/v3");
   });
 });
 
@@ -145,9 +146,11 @@ describe("composio_search_tools", () => {
 
       assert.equal(result.success, true);
       assert.equal(result.data.count, 1);
-      assert.equal(result.data.tools[0].name, "github_create_issue");
+      assert.equal(result.data.tools[0].tool_slug, "github_create_issue");
+      assert.equal(Object.hasOwn(result.data.tools[0], "name"), false);
       assert.equal(result.data.tools[0].toolkit, "github");
       assert.equal(result.data.query, "github issue");
+      assert.equal(result.data.execution.tool, "composio_execute_tool");
     } finally {
       restore();
     }
@@ -209,6 +212,7 @@ describe("composio_search_tools", () => {
       const [searchTool] = toolsFactory(sdk);
       await searchTool.execute({ limit: 5 }, makeContext());
       assert.ok(capturedUrl.includes("limit=5"), `URL should include limit=5, got: ${capturedUrl}`);
+      assert.ok(capturedUrl.includes("query=") === false, `URL should not include query without a query param, got: ${capturedUrl}`);
     } finally {
       globalThis.fetch = original;
     }

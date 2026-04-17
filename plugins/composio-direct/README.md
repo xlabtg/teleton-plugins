@@ -25,7 +25,7 @@ For container and CI deployments, Teleton also resolves the secret from `COMPOSI
 # config.yaml example
 plugins:
   composio_direct:
-    base_url: "https://backend.composio.dev/api/v3.1"  # optional
+    base_url: "https://backend.composio.dev/api/v3"    # optional
     timeout_ms: 30000                                  # optional (default: 30s)
     max_parallel_executions: 10                        # optional (default: 10)
     tool_version: "latest"                             # optional
@@ -53,21 +53,32 @@ Search for available Composio tools by name, description, or toolkit.
   "data": {
     "tools": [
       {
-        "name": "GITHUB_CREATE_ISSUE",
-        "slug": "GITHUB_CREATE_ISSUE",
+        "tool_slug": "GITHUB_CREATE_ISSUE",
+        "display_name": "Create issue",
         "description": "Create a new issue in a GitHub repository",
         "toolkit": "github",
         "auth_required": true,
         "version": "latest",
-        "tags": ["issue", "github"]
+        "tags": ["issue", "github"],
+        "execute_with": {
+          "tool": "composio_execute_tool",
+          "tool_slug": "GITHUB_CREATE_ISSUE",
+          "parameters_param": "parameters"
+        }
       }
     ],
     "count": 1,
     "query": "create issue",
-    "total_available": 57
+    "total_available": 57,
+    "execution": {
+      "tool": "composio_execute_tool",
+      "instruction": "Do not call returned tool_slug values directly. To run a Composio result, call composio_execute_tool with { tool_slug, parameters }."
+    }
   }
 }
 ```
+
+The returned `tool_slug` values are Composio tool identifiers, not Teleton tool names. Execute them through `composio_execute_tool` or `composio_multi_execute`.
 
 ---
 
