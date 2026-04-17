@@ -62,7 +62,7 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.2.0");
+    assert.equal(manifest.version, "1.3.0");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3.1");
     assert.equal(toolList.length, 4);
     assert.deepEqual(
@@ -112,10 +112,28 @@ describe("composio-direct Teleton integration", () => {
 
       const url = new URL(calls[0].url);
       assert.equal(url.origin + url.pathname, "https://example.test/api/v3.1/tools");
-      assert.equal(url.searchParams.get("query"), "create issue");
+      assert.equal(url.searchParams.get("search"), "create issue");
       assert.equal(url.searchParams.get("toolkit_slug"), "github");
       assert.equal(url.searchParams.get("toolkit_versions"), "latest");
       assert.equal(url.searchParams.get("limit"), "5");
+    } finally {
+      restore();
+    }
+  });
+
+  it("sends 'search' (not 'query') to Composio /tools endpoint", async () => {
+    const { calls, restore } = mockFetch(() => ({
+      status: 200,
+      data: { items: [], total_items: 0 },
+    }));
+
+    try {
+      const searchTool = toolsFactory(makeSdk()).find((t) => t.name === "composio_search_tools");
+      await searchTool.execute({ query: "coinmarketcap" }, makeContext());
+
+      const url = new URL(calls[0].url);
+      assert.equal(url.searchParams.get("search"), "coinmarketcap");
+      assert.equal(url.searchParams.has("query"), false);
     } finally {
       restore();
     }

@@ -75,9 +75,13 @@ async function getComposioSdk(apiKey) {
   const Cls = await loadComposioSdk();
   if (!Cls) return null;
   if (composioSdkCache.has(apiKey)) return composioSdkCache.get(apiKey);
-  const instance = new Cls({ apiKey, allowTracking: false });
-  composioSdkCache.set(apiKey, instance);
-  return instance;
+  try {
+    const instance = new Cls({ apiKey, allowTracking: false });
+    composioSdkCache.set(apiKey, instance);
+    return instance;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +91,7 @@ async function getComposioSdk(apiKey) {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.2.0",
+  version: "1.3.0",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
@@ -577,8 +581,12 @@ export const tools = (sdk) => {
           if (toolkitVersions) query.toolkitVersions = toolkitVersions;
 
           const toolList = await composioSdk.tools.getRawComposioTools(query);
-          const items = Array.isArray(toolList?.items) ? toolList.items : [];
-          const tools = items.map((item) => formatTool(item, includeParams));
+          const rawItems = Array.isArray(toolList)
+            ? toolList
+            : Array.isArray(toolList?.items)
+              ? toolList.items
+              : [];
+          const tools = rawItems.map((item) => formatTool(item, includeParams));
 
           sdk.log.info(`composio_search_tools: found ${tools.length} tools (SDK)`);
           return {
@@ -599,7 +607,7 @@ export const tools = (sdk) => {
 
       // --- HTTP fallback path ---
       const qs = new URLSearchParams();
-      if (params.query) qs.set("query", params.query);
+      if (params.query) qs.set("search", params.query);
       if (params.toolkit) qs.set("toolkit_slug", normalizeToolkitSlug(params.toolkit));
       qs.set("limit", String(limit));
       qs.set("include_deprecated", "false");
