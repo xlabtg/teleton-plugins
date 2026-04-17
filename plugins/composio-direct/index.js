@@ -91,7 +91,7 @@ async function getComposioSdk(apiKey) {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.4.0",
+  version: "1.5.0",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
@@ -829,9 +829,12 @@ export const tools = (sdk) => {
 
       sdk.log.debug(`composio_execute_tool: POST ${normalizedSlug} via HTTP (timeout=${effectiveTimeout}ms)`);
 
+      const toolArguments = params.connected_account_id
+        ? { ...params.parameters, connected_account_id: params.connected_account_id }
+        : params.parameters;
       const body = {
         user_id: userId,
-        arguments: params.parameters,
+        arguments: toolArguments,
         version: params.version ?? toolVersion,
       };
       if (params.connected_account_id) {
@@ -1083,9 +1086,12 @@ export const tools = (sdk) => {
           const effectiveTimeout = exec.timeout_override_ms ?? timeoutMs;
           const url = `${baseUrl}/tools/execute/${encodeURIComponent(normalizedSlug)}`;
 
+          const execArguments = exec.connected_account_id
+            ? { ...exec.parameters, connected_account_id: exec.connected_account_id }
+            : exec.parameters;
           const body = {
             user_id: getUserId(context),
-            arguments: exec.parameters,
+            arguments: execArguments,
             version: exec.version ?? toolVersion,
           };
           if (exec.connected_account_id) {

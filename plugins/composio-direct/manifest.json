@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
   "author": {
     "name": "xlabtg",

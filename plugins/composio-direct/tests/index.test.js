@@ -62,7 +62,7 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.4.0");
+    assert.equal(manifest.version, "1.5.0");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3.1");
     assert.equal(toolList.length, 4);
     assert.deepEqual(
@@ -195,6 +195,38 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.success, true);
       assert.equal(calls[0].body.connected_account_id, "ca_lc9TestLuaI");
       assert.equal(calls[0].body.user_id, "user-42");
+      // connected_account_id must also be inside arguments so Composio API picks it up
+      assert.equal(calls[0].body.arguments.connected_account_id, "ca_lc9TestLuaI");
+    } finally {
+      restore();
+    }
+  });
+
+  it("passes connected_account_id inside arguments for multi_execute HTTP body", async () => {
+    const { calls, restore } = mockFetch(() => ({
+      status: 200,
+      data: { successful: true, data: { ok: true } },
+    }));
+
+    try {
+      const multiTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_multi_execute");
+      const result = await multiTool.execute(
+        {
+          executions: [
+            {
+              tool_slug: "COINMARKETCAP_CRYPTOCURRENCY_LISTINGS_LATEST",
+              parameters: { symbol: "BTC" },
+              connected_account_id: "ca_multi_inside",
+            },
+          ],
+        },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      // connected_account_id must be inside arguments so Composio API picks it up
+      assert.equal(calls[0].body.arguments.connected_account_id, "ca_multi_inside");
+      assert.equal(calls[0].body.connected_account_id, "ca_multi_inside");
     } finally {
       restore();
     }
