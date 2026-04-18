@@ -113,7 +113,7 @@ Execute a single Composio tool by its slug.
   "error": "auth_required",
   "auth": {
     "service": "github",
-    "connect_url": "https://app.composio.dev/connect?app=github&user_id=123456",
+    "connect_url": null,
     "message": "Authorization required for GITHUB. Call composio_auth_link for a fresh connection link."
   }
 }
@@ -150,6 +150,10 @@ Execute multiple tools in parallel.
 ### `composio_auth_link`
 
 Get an OAuth authorization link for a service.
+
+The tool creates a real Composio Connect Link through the v3 `auth_configs`
+and `connected_accounts/link` APIs. For toolkits without Composio-managed auth,
+create an auth config in Composio and pass its ID as `auth_config_id`.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
