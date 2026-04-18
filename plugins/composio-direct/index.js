@@ -63,6 +63,8 @@ const composioSdkCache = new Map();
 const DEFAULT_BASE_URL = "https://backend.composio.dev/api/v3";
 const DEFAULT_TOOL_VERSION = "latest";
 const DEFAULT_TOOLKIT_VERSIONS = "latest";
+const COMPOSIO_MANAGED_AUTH_UNAVAILABLE_PATTERN =
+  /default auth config not found|does not have managed credentials|managed auth/i;
 const COMPOSIO_EXECUTION_GUIDANCE = {
   tool: "composio_execute_tool",
   tool_slug_param: "tool_slug",
@@ -553,10 +555,15 @@ export const tools = (sdk) => {
       });
 
       if (createResponse.status !== 201 && createResponse.status !== 200) {
-        throw new Error(
+        const message =
           getComposioMessage(createResponse.data) ||
-            `Could not create auth config for ${toolkit}: HTTP ${createResponse.status}`
-        );
+          `Could not create auth config for ${toolkit}: HTTP ${createResponse.status}`;
+        if (COMPOSIO_MANAGED_AUTH_UNAVAILABLE_PATTERN.test(message)) {
+          throw new Error(
+            `${message}. This toolkit does not support Composio-managed auth. Create an auth config in Composio for ${toolkit} and retry composio_auth_link with auth_config_id.`
+          );
+        }
+        throw new Error(message);
       }
 
       resolvedAuthConfigId = createResponse.data?.auth_config?.id ?? createResponse.data?.id;
@@ -1316,49 +1323,26 @@ export const tools = (sdk) => {
 
       let link;
       try {
-        const composioSdk = await getComposioSdk(apiKey);
-        if (composioSdk?.toolkits?.authorize) {
-          const request = await composioSdk.toolkits.authorize(
-            userId,
-            service,
-            params.auth_config_id
-          );
-          link = {
-            url: request.redirectUrl ?? request.redirect_url,
-            service,
-            auth_config_id: request.authConfigId ?? request.auth_config_id ?? params.auth_config_id ?? null,
-            connected_account_id: request.connectedAccountId ?? request.connected_account_id ?? null,
-            expires_at: request.expiresAt ?? request.expires_at ?? null,
-            link_token: request.linkToken ?? request.link_token ?? null,
-          };
-        }
+        link = await createAuthLink({
+          apiKey,
+          service,
+          userId,
+          authConfigId: params.auth_config_id,
+          callbackUrl: params.callback_url,
+          alias: params.alias,
+        });
       } catch (err) {
-        sdk.log.debug(`composio_auth_link: SDK authorize failed — ${formatApiError(err)}, falling back to HTTP`);
-      }
-
-      if (!link?.url) {
-        try {
-          link = await createAuthLink({
-            apiKey,
+        sdk.log.debug(`composio_auth_link: HTTP authorize failed — ${formatApiError(err)}`);
+        return {
+          success: false,
+          error: `Could not create Composio auth link for ${service}: ${formatApiError(err)}`,
+          data: {
             service,
-            userId,
-            authConfigId: params.auth_config_id,
-            callbackUrl: params.callback_url,
-            alias: params.alias,
-          });
-        } catch (err) {
-          sdk.log.debug(`composio_auth_link: HTTP authorize failed — ${formatApiError(err)}`);
-          return {
-            success: false,
-            error: `Could not create Composio auth link for ${service}: ${formatApiError(err)}`,
-            data: {
-              service,
-              user_id: userId,
-              hint:
-                "Create or verify a Composio auth config for this toolkit, then retry with auth_config_id if needed.",
-            },
-          };
-        }
+            user_id: userId,
+            hint:
+              "Create or verify a Composio auth config for this toolkit, then retry with auth_config_id if needed.",
+          },
+        };
       }
 
       if (!link?.url) {

@@ -79,6 +79,30 @@ function mockFetch(responses) {
   };
 }
 
+/**
+ * Install a global fetch mock backed by a request handler.
+ * @param {(call: { url: string; method: string; body: unknown }) => { status: number; data: unknown }} handler
+ * @returns {Function} restore function
+ */
+function mockFetchHandler(handler) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const body = opts.body ? JSON.parse(String(opts.body)) : undefined;
+    const resp = handler({
+      url: String(url),
+      method: String(opts.method ?? "GET"),
+      body,
+    });
+    return {
+      status: resp.status,
+      text: async () => JSON.stringify(resp.data),
+    };
+  };
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Load the plugin
 // ---------------------------------------------------------------------------
@@ -485,6 +509,74 @@ describe("composio_auth_link", () => {
       assert.equal(result.success, true);
       assert.equal(result.data.url, "https://connect.composio.dev/link/ln_gmail");
       assert.equal(result.data.auth_config_id, "ac_gmail");
+    } finally {
+      restore();
+    }
+  });
+
+  it("sends callback_url and alias to the connected accounts link API", async () => {
+    const restore = mockFetchHandler((call) => {
+      const url = new URL(call.url);
+      if (call.method === "POST" && url.pathname.endsWith("/connected_accounts/link")) {
+        assert.deepEqual(call.body, {
+          auth_config_id: "ac_gmail",
+          user_id: "789",
+          callback_url: "https://example.com/composio/callback",
+          alias: "primary",
+        });
+        return {
+          status: 201,
+          data: { redirect_url: "https://connect.composio.dev/link/ln_gmail" },
+        };
+      }
+      throw new Error(`Unexpected request: ${call.method} ${call.url}`);
+    });
+
+    try {
+      const sdk = makeSdk();
+      const toolList = toolsFactory(sdk);
+      const authTool = toolList.find((t) => t.name === "composio_auth_link");
+      const result = await authTool.execute(
+        {
+          service: "gmail",
+          auth_config_id: "ac_gmail",
+          callback_url: "https://example.com/composio/callback",
+          alias: "primary",
+        },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.url, "https://connect.composio.dev/link/ln_gmail");
+      assert.equal(result.data.auth_config_id, "ac_gmail");
+    } finally {
+      restore();
+    }
+  });
+
+  it("returns an actionable error when Composio-managed auth is unavailable", async () => {
+    const restore = mockFetch([
+      { status: 200, data: { items: [] } },
+      {
+        status: 400,
+        data: {
+          message:
+            'Default auth config not found for toolkit "openai". Composio does not have managed credentials for this toolkit.',
+        },
+      },
+    ]);
+
+    try {
+      const sdk = makeSdk();
+      const toolList = toolsFactory(sdk);
+      const authTool = toolList.find((t) => t.name === "composio_auth_link");
+      const result = await authTool.execute({ service: "openai" }, makeContext());
+
+      assert.equal(result.success, false);
+      assert.ok(result.error.includes("does not support Composio-managed auth"));
+      assert.ok(result.error.includes("auth_config_id"));
+      assert.equal(result.data.service, "openai");
+      assert.equal(result.data.user_id, "789");
     } finally {
       restore();
     }
