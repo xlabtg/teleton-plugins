@@ -58,18 +58,20 @@ function mockFetch(handler) {
 }
 
 describe("composio-direct Teleton integration", () => {
-  it("exports four Teleton tools and current manifest defaults", () => {
+  it("exports schema and connection tools with current manifest defaults", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.6.0");
+    assert.equal(manifest.version, "1.7.0");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3");
-    assert.equal(toolList.length, 4);
     assert.deepEqual(
       toolList.map((tool) => tool.name).sort(),
       [
         "composio_auth_link",
         "composio_execute_tool",
+        "composio_get_connection",
+        "composio_get_tool_schemas",
+        "composio_list_connections",
         "composio_multi_execute",
         "composio_search_tools",
       ]
@@ -435,6 +437,136 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.data.connected_account_id, "ca_123");
       assert.equal(result.data.user_id, "user-42");
       assert.equal(calls.length, 3);
+    } finally {
+      restore();
+    }
+  });
+
+  it("fetches tool schemas through the current /tools/{tool_slug} API", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      const url = new URL(call.url);
+      assert.equal(url.pathname, "/api/v3/tools/GITHUB_CREATE_ISSUE");
+      assert.equal(url.searchParams.get("version"), "latest");
+      assert.equal(url.searchParams.get("toolkit_versions"), "latest");
+      return {
+        status: 200,
+        data: {
+          slug: "GITHUB_CREATE_ISSUE",
+          name: "Create issue",
+          description: "Create a GitHub issue",
+          toolkit: { slug: "github", name: "GitHub" },
+          input_parameters: { title: { type: "string", required: true } },
+          output_parameters: { url: { type: "string" } },
+          version: "20250905_00",
+        },
+      };
+    });
+
+    try {
+      const schemaTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_get_tool_schemas");
+      const result = await schemaTool.execute(
+        {
+          tool_slugs: ["github_create_issue"],
+          include: ["input_schema", "output_schema"],
+        },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.count, 1);
+      assert.equal(result.data.schemas[0].tool_slug, "GITHUB_CREATE_ISSUE");
+      assert.deepEqual(result.data.schemas[0].input_schema, {
+        title: { type: "string", required: true },
+      });
+      assert.deepEqual(result.data.schemas[0].output_schema, {
+        url: { type: "string" },
+      });
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists current-user connected accounts with documented filters", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      const url = new URL(call.url);
+      assert.equal(url.pathname, "/api/v3/connected_accounts");
+      assert.deepEqual(url.searchParams.getAll("toolkit_slugs"), ["github"]);
+      assert.deepEqual(url.searchParams.getAll("statuses"), ["ACTIVE"]);
+      assert.deepEqual(url.searchParams.getAll("user_ids"), ["user-42"]);
+      assert.equal(url.searchParams.get("limit"), "25");
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              id: "ca_123",
+              alias: "work",
+              user_id: "user-42",
+              status: "ACTIVE",
+              toolkit: { slug: "github", name: "GitHub" },
+              auth_config: {
+                id: "ac_123",
+                auth_scheme: "OAUTH2",
+                is_composio_managed: true,
+              },
+              state: { access_token: "secret-token" },
+            },
+          ],
+          next_cursor: "cursor_2",
+        },
+      };
+    });
+
+    try {
+      const listTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_list_connections");
+      const result = await listTool.execute(
+        { toolkit: "github", status: "ACTIVE", limit: 25 },
+        makeContext({ senderId: "user-42" })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.count, 1);
+      assert.equal(result.data.next_cursor, "cursor_2");
+      assert.equal(result.data.connections[0].id, "ca_123");
+      assert.equal(result.data.connections[0].execute_with.connected_account_id, "ca_123");
+      assert.equal(result.data.connections[0].state, undefined);
+      assert.deepEqual(result.data.connections[0].state_keys, ["access_token"]);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("gets a connected account without exposing state values", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      const url = new URL(call.url);
+      assert.equal(url.pathname, "/api/v3/connected_accounts/ca_123");
+      return {
+        status: 200,
+        data: {
+          id: "ca_123",
+          alias: "work",
+          user_id: "user-42",
+          status: "ACTIVE",
+          toolkit: { slug: "github", name: "GitHub" },
+          state: { refresh_token: "secret-refresh-token" },
+        },
+      };
+    });
+
+    try {
+      const getTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_get_connection");
+      const result = await getTool.execute(
+        { connected_account_id: "ca_123" },
+        makeContext({ senderId: "user-42" })
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.connection.id, "ca_123");
+      assert.equal(result.data.connection.state, undefined);
+      assert.deepEqual(result.data.connection.state_keys, ["refresh_token"]);
+      assert.equal(calls.length, 1);
     } finally {
       restore();
     }

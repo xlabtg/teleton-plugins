@@ -119,20 +119,22 @@ describe("manifest", () => {
     assert.ok(manifest.name, "manifest.name is set");
     assert.ok(manifest.version, "manifest.version is set");
     assert.ok(manifest.secrets?.composio_api_key, "secret composio_api_key declared");
-    assert.equal(manifest.version, "1.6.0");
+    assert.equal(manifest.version, "1.7.0");
     assert.equal(manifest.defaultConfig?.base_url, "https://backend.composio.dev/api/v3");
   });
 });
 
 describe("tools factory", () => {
-  it("returns an array of 4 tools when called with sdk", () => {
+  it("returns schema, connection, and execution tools when called with sdk", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
-    assert.equal(toolList.length, 4);
     const names = toolList.map((t) => t.name);
     assert.deepEqual(names.sort(), [
       "composio_auth_link",
       "composio_execute_tool",
+      "composio_get_connection",
+      "composio_get_tool_schemas",
+      "composio_list_connections",
       "composio_multi_execute",
       "composio_search_tools",
     ]);

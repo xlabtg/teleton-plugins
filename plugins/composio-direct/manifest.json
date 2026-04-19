@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
   "author": {
     "name": "xlabtg",
@@ -28,9 +28,12 @@
   },
   "tools": [
     { "name": "composio_search_tools", "description": "Search for Composio tool_slug values by query, toolkit name, or description" },
+    { "name": "composio_get_tool_schemas", "description": "Fetch Composio input and output schemas for one or more tool_slug values" },
     { "name": "composio_execute_tool", "description": "Execute a single Composio tool_slug with given parameters" },
     { "name": "composio_multi_execute", "description": "Execute multiple Composio tool_slug values in parallel or sequentially" },
-    { "name": "composio_auth_link", "description": "Get an OAuth authorization link for a Composio-connected service (GitHub, Gmail, Slack, etc.)" }
+    { "name": "composio_auth_link", "description": "Get an OAuth authorization link for a Composio-connected service (GitHub, Gmail, Slack, etc.)" },
+    { "name": "composio_list_connections", "description": "List Composio connected accounts for the current user with optional filters" },
+    { "name": "composio_get_connection", "description": "Get one Composio connected account by connected_account_id" }
   ],
   "permissions": [],
   "tags": ["automation", "composio", "integrations", "api", "oauth", "productivity"],
