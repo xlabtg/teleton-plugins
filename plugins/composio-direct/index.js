@@ -1,7 +1,7 @@
 /**
  * composio-direct — Direct Integration with 1000+ Composio Tools
  *
- * Provides 7 tools for direct Composio API access:
+ * Provides 27 tools for direct Composio API access:
  *   composio_search_tools   — search tools by query or toolkit
  *   composio_get_tool_schemas — fetch input/output schemas by tool slug
  *   composio_execute_tool   — execute a single tool
@@ -9,6 +9,14 @@
  *   composio_auth_link      — get OAuth authorization links
  *   composio_list_connections — list current-user connected accounts
  *   composio_get_connection — fetch one connected account by id
+ *   composio_manage_connections — run the manage_connections meta-tool
+ *   composio_list_toolkits / composio_get_toolkit — inspect toolkit support
+ *   composio_list_files / composio_request_file_upload — Composio Files API
+ *   composio_list_trigger_types / composio_get_trigger_type — trigger schemas
+ *   composio_list_triggers / composio_upsert_trigger — trigger instances
+ *   composio_set_trigger_status / composio_delete_trigger — trigger control
+ *   composio_list_webhook_events / composio_*_webhook — webhook subscriptions
+ *   composio_remote_bash / composio_remote_workbench — remote meta-tool wrappers
  *
  * Authentication:
  *   - Requires a Composio API key stored in sdk.secrets as "composio_api_key"
@@ -103,10 +111,10 @@ async function getComposioSdk(apiKey) {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.7.0",
+  version: "1.8.0",
   sdkVersion: ">=1.0.0",
   description:
-    "Direct access to 1000+ Composio automation tools — search, execute, batch-run, and authorize services like GitHub, Gmail, Slack, Notion, Jira, Linear without MCP transport",
+    "Direct access to 1000+ Composio automation tools plus v3 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
   secrets: {
     composio_api_key: {
       required: true,
@@ -534,6 +542,218 @@ function formatConnectedAccount(item) {
 }
 
 /**
+ * Convert toolkit payloads into compact, predictable output.
+ * @param {Record<string, unknown>} item
+ * @returns {Record<string, unknown>}
+ */
+function formatToolkit(item) {
+  const meta = isRecord(item.meta) ? item.meta : {};
+  const toolkit = {
+    slug: item.slug ?? null,
+    name: item.name ?? item.slug ?? null,
+    auth_schemes: item.auth_schemes ?? [],
+    composio_managed_auth_schemes: item.composio_managed_auth_schemes ?? [],
+    no_auth: item.no_auth ?? null,
+    is_local_toolkit: item.is_local_toolkit ?? null,
+    auth_guide_url: item.auth_guide_url ?? null,
+    deprecated: item.deprecated ?? null,
+    meta: {
+      description: meta.description ?? item.description ?? null,
+      logo: meta.logo ?? null,
+      app_url: meta.app_url ?? null,
+      categories: meta.categories ?? [],
+      triggers_count: meta.triggers_count ?? null,
+      tools_count: meta.tools_count ?? null,
+      version: meta.version ?? item.version ?? null,
+      created_at: meta.created_at ?? null,
+      updated_at: meta.updated_at ?? null,
+    },
+  };
+
+  if (item.enabled !== undefined) toolkit.enabled = item.enabled;
+  if (item.auth_config_details !== undefined) {
+    toolkit.auth_config_details = item.auth_config_details;
+  }
+
+  return toolkit;
+}
+
+/**
+ * Convert Composio Files API payloads into compact output.
+ * @param {Record<string, unknown>} item
+ * @returns {Record<string, unknown>}
+ */
+function formatFile(item) {
+  return {
+    id: item.id ?? null,
+    key: item.key ?? null,
+    toolkit_slug: item.toolkit_slug ?? null,
+    tool_slug: item.tool_slug ?? null,
+    filename: item.filename ?? null,
+    mimetype: item.mimetype ?? null,
+    md5: item.md5 ?? null,
+    created_at: item.created_at ?? null,
+    updated_at: item.updated_at ?? null,
+  };
+}
+
+/**
+ * Convert trigger type payloads into schema-centric output.
+ * @param {Record<string, unknown>} item
+ * @returns {Record<string, unknown>}
+ */
+function formatTriggerType(item) {
+  const toolkit = isRecord(item.toolkit) ? item.toolkit : {};
+  return {
+    slug: item.slug ?? null,
+    name: item.name ?? item.slug ?? null,
+    description: item.description ?? null,
+    instructions: item.instructions ?? null,
+    type: item.type ?? null,
+    toolkit: {
+      slug: toolkit.slug ?? null,
+      name: toolkit.name ?? null,
+      logo: toolkit.logo ?? null,
+    },
+    config_schema: item.config ?? null,
+    payload_schema: item.payload ?? null,
+    version: item.version ?? null,
+  };
+}
+
+/**
+ * Convert trigger instance payloads without exposing state values.
+ * @param {Record<string, unknown>} item
+ * @returns {Record<string, unknown>}
+ */
+function formatTriggerInstance(item) {
+  const stateKeys = isRecord(item.state) ? Object.keys(item.state).sort() : [];
+  return {
+    id: item.id ?? item.uuid ?? null,
+    uuid: item.uuid ?? null,
+    connected_account_id:
+      item.connected_account_id ?? item.connectedAccountId ?? item.connected_account_uuid ?? null,
+    user_id: item.user_id ?? null,
+    trigger_name: item.trigger_name ?? item.triggerName ?? null,
+    trigger_data: item.trigger_data ?? null,
+    version: item.version ?? null,
+    trigger_config: item.trigger_config ?? item.triggerConfig ?? null,
+    updated_at: item.updated_at ?? item.updatedAt ?? null,
+    disabled_at: item.disabled_at ?? item.disabledAt ?? null,
+    state_keys: stateKeys,
+  };
+}
+
+/**
+ * Convert webhook subscription payloads, redacting the signing secret by default.
+ * @param {Record<string, unknown>} item
+ * @param {boolean} includeSecret
+ * @returns {Record<string, unknown>}
+ */
+function formatWebhookSubscription(item, includeSecret = false) {
+  const secret = item.secret;
+  const webhook = {
+    id: item.id ?? null,
+    webhook_url: item.webhook_url ?? null,
+    version: item.version ?? null,
+    enabled_events: item.enabled_events ?? [],
+    created_at: item.created_at ?? null,
+    updated_at: item.updated_at ?? null,
+    secret_present: typeof secret === "string" && secret.length > 0,
+  };
+
+  if (includeSecret && secret !== undefined && secret !== null) {
+    webhook.secret = secret;
+  }
+
+  return webhook;
+}
+
+/**
+ * Convert webhook event type payloads.
+ * @param {Record<string, unknown>} item
+ * @returns {Record<string, unknown>}
+ */
+function formatWebhookEventType(item) {
+  return {
+    event_type: item.event_type ?? null,
+    description: item.description ?? null,
+    supported_versions: item.supported_versions ?? [],
+  };
+}
+
+/**
+ * Append Composio toolkit_versions query params. The docs allow "latest" or
+ * bracket notation for per-toolkit versions.
+ * @param {URLSearchParams} qs
+ * @param {unknown} value
+ */
+function appendToolkitVersions(qs, value) {
+  if (value === undefined || value === null || value === "") return;
+  if (isRecord(value)) {
+    for (const [toolkit, version] of Object.entries(value)) {
+      if (version !== undefined && version !== null && version !== "") {
+        qs.set(`toolkit_versions[${toolkit}]`, String(version));
+      }
+    }
+    return;
+  }
+  qs.set("toolkit_versions", String(value));
+}
+
+/**
+ * Extract common pagination metadata from Composio list responses.
+ * @param {unknown} data
+ * @returns {Record<string, unknown>}
+ */
+function paginationFrom(data) {
+  if (!isRecord(data)) {
+    return {
+      next_cursor: null,
+      total_items: null,
+      total_pages: null,
+      current_page: null,
+    };
+  }
+  return {
+    next_cursor: data.next_cursor ?? null,
+    total_items: data.total_items ?? data.totalItems ?? data.total ?? null,
+    total_pages: data.total_pages ?? null,
+    current_page: data.current_page ?? null,
+  };
+}
+
+/**
+ * @param {unknown} data
+ * @returns {Record<string, unknown>[]}
+ */
+function extractItems(data) {
+  if (!isRecord(data)) return [];
+  const items = data.items ?? data.data ?? [];
+  return Array.isArray(items) ? items.filter(isRecord) : [];
+}
+
+/**
+ * @param {string} baseUrl
+ * @param {string} path
+ * @param {URLSearchParams} [qs]
+ * @returns {string}
+ */
+function buildApiUrl(baseUrl, path, qs) {
+  const query = qs?.toString();
+  return `${baseUrl}${path}${query ? `?${query}` : ""}`;
+}
+
+/**
+ * @param {number} status
+ * @param {number[]} okStatuses
+ * @returns {boolean}
+ */
+function isOkStatus(status, okStatuses) {
+  return okStatuses.includes(status);
+}
+
+/**
  * Detect whether Composio could not resolve a tool slug.
  * @param {{ status: number; data: unknown }} response
  * @returns {boolean}
@@ -628,6 +848,45 @@ export const tools = (sdk) => {
       success: false,
       error:
         "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your key from https://app.composio.dev/settings",
+    };
+  }
+
+  /**
+   * Execute a Composio v3 HTTP request using the plugin defaults.
+   * @param {object} opts
+   * @param {string} opts.apiKey
+   * @param {string} opts.path
+   * @param {string} [opts.method]
+   * @param {URLSearchParams} [opts.query]
+   * @param {unknown} [opts.body]
+   * @param {number} [opts.timeoutMs]
+   * @returns {Promise<{ status: number; data: unknown }>}
+   */
+  function callComposio({ apiKey, path, method = "GET", query, body, timeoutMs }) {
+    const cfg = getConfig();
+    return fetchWithRetry({
+      url: buildApiUrl(cfg.baseUrl, path, query),
+      method,
+      headers: buildHeaders(apiKey),
+      body,
+      timeoutMs: timeoutMs ?? cfg.timeoutMs,
+      log: sdk.log,
+    });
+  }
+
+  /**
+   * Convert an unsuccessful Composio HTTP response to the plugin result shape.
+   * @param {string} action
+   * @param {{ status: number; data: unknown }} response
+   * @returns {{ success: false; error: string; data: Record<string, unknown> }}
+   */
+  function failedResponse(action, response) {
+    return {
+      success: false,
+      error: getComposioMessage(response.data) || `${action}: HTTP ${response.status}`,
+      data: {
+        status: response.status,
+      },
     };
   }
 
@@ -830,7 +1089,7 @@ export const tools = (sdk) => {
       if (params.toolkit) qs.set("toolkit_slug", normalizeToolkitSlug(params.toolkit));
       qs.set("limit", String(limit));
       qs.set("include_deprecated", "false");
-      if (toolkitVersions) qs.set("toolkit_versions", String(toolkitVersions));
+      appendToolkitVersions(qs, toolkitVersions);
 
       const url = `${baseUrl}/tools?${qs.toString()}`;
       sdk.log.debug(`composio_search_tools: GET ${url.replace(apiKey, "[REDACTED]")}`);
@@ -955,7 +1214,7 @@ export const tools = (sdk) => {
           const qs = new URLSearchParams();
           const version = params.version ?? toolVersion;
           if (version) qs.set("version", String(version));
-          if (toolkitVersions) qs.set("toolkit_versions", String(toolkitVersions));
+          appendToolkitVersions(qs, toolkitVersions);
 
           try {
             const response = await fetchWithRetry({
@@ -1904,6 +2163,1413 @@ export const tools = (sdk) => {
     },
   };
 
+  // -------------------------------------------------------------------------
+  // Tool 8: composio_list_toolkits
+  // -------------------------------------------------------------------------
+
+  const composioListToolkits = {
+    name: "composio_list_toolkits",
+    description:
+      "List Composio v3 toolkits so the agent can discover available applications, auth modes, tool counts, trigger support, and categories.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        search: {
+          type: "string",
+          description: "Search toolkit names or descriptions.",
+        },
+        query: {
+          type: "string",
+          description: "Alias for search.",
+        },
+        category: {
+          type: "string",
+          description: "Filter by toolkit category.",
+        },
+        managed_by: {
+          type: "string",
+          description: "Filter by manager, for example composio.",
+        },
+        sort_by: {
+          type: "string",
+          description: "Sort field supported by Composio, for example usage or alphabetical.",
+        },
+        include_deprecated: {
+          type: "boolean",
+          description: "Include deprecated toolkits. Default: false.",
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by a previous call.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of toolkits to return (1-1000, default: 50).",
+          minimum: 1,
+          maximum: 1000,
+        },
+      },
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const qs = new URLSearchParams();
+      const search = params.search ?? params.query;
+      if (search) qs.set("search", String(search));
+      if (params.category) qs.set("category", String(params.category));
+      if (params.managed_by) qs.set("managed_by", String(params.managed_by));
+      if (params.sort_by) qs.set("sort_by", String(params.sort_by));
+      qs.set("include_deprecated", String(params.include_deprecated === true));
+      qs.set("limit", String(normalizeLimit(params.limit, 50, 1000)));
+      if (params.cursor) qs.set("cursor", String(params.cursor));
+
+      try {
+        const response = await callComposio({ apiKey, path: "/toolkits", query: qs });
+        if (response.status !== 200) {
+          return failedResponse("Could not list toolkits", response);
+        }
+
+        const toolkits = extractItems(response.data).map(formatToolkit);
+        return {
+          success: true,
+          data: {
+            toolkits,
+            count: toolkits.length,
+            ...paginationFrom(response.data),
+            filters: {
+              search: search ?? null,
+              category: params.category ?? null,
+              managed_by: params.managed_by ?? null,
+            },
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list toolkits: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 9: composio_get_toolkit
+  // -------------------------------------------------------------------------
+
+  const composioGetToolkit = {
+    name: "composio_get_toolkit",
+    description:
+      "Get detailed Composio v3 toolkit metadata by toolkit slug, including auth details and versioned capability metadata.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        toolkit: {
+          type: "string",
+          description: "Toolkit slug, for example github, gmail, slack, notion, or linear.",
+        },
+        version: {
+          type: "string",
+          description: "Optional toolkit version. Defaults to plugin toolkit_versions when it is a string, otherwise latest.",
+        },
+      },
+      required: ["toolkit"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.toolkit || typeof params.toolkit !== "string") {
+        return { success: false, error: "toolkit is required and must be a string" };
+      }
+
+      const { toolkitVersions } = getConfig();
+      const qs = new URLSearchParams();
+      const version =
+        params.version ??
+        (typeof toolkitVersions === "string" ? toolkitVersions : DEFAULT_TOOLKIT_VERSIONS);
+      if (version) qs.set("version", String(version));
+
+      const toolkit = normalizeToolkitSlug(params.toolkit);
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/toolkits/${encodeURIComponent(toolkit)}`,
+          query: qs,
+        });
+        if (response.status !== 200 || !isRecord(response.data)) {
+          return failedResponse(`Could not get toolkit ${toolkit}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            toolkit: formatToolkit(response.data),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not get toolkit ${toolkit}: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 10: composio_list_files
+  // -------------------------------------------------------------------------
+
+  const composioListFiles = {
+    name: "composio_list_files",
+    description:
+      "List files registered with Composio's v3 Files API for a toolkit/tool pair. Use before reusing uploaded files in tool parameters.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        toolkit: {
+          type: "string",
+          description: "Toolkit slug associated with the files, for example gmail.",
+        },
+        tool_slug: {
+          type: "string",
+          description: "Optional Composio tool slug associated with the files.",
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by a previous call.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of files to return (1-1000, default: 50).",
+          minimum: 1,
+          maximum: 1000,
+        },
+      },
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const qs = new URLSearchParams();
+      if (params.toolkit) qs.set("toolkit_slug", normalizeToolkitSlug(params.toolkit));
+      if (params.tool_slug) qs.set("tool_slug", normalizeToolSlug(params.tool_slug));
+      qs.set("limit", String(normalizeLimit(params.limit, 50, 1000)));
+      if (params.cursor) qs.set("cursor", String(params.cursor));
+
+      try {
+        const response = await callComposio({ apiKey, path: "/files/list", query: qs });
+        if (response.status !== 200) {
+          return failedResponse("Could not list files", response);
+        }
+
+        const files = extractItems(response.data).map(formatFile);
+        return {
+          success: true,
+          data: {
+            files,
+            count: files.length,
+            ...paginationFrom(response.data),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list files: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 11: composio_request_file_upload
+  // -------------------------------------------------------------------------
+
+  const composioRequestFileUpload = {
+    name: "composio_request_file_upload",
+    description:
+      "Request a Composio v3 Files API presigned upload URL for a file that will be passed to a Composio tool.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        toolkit: {
+          type: "string",
+          description: "Toolkit slug that owns the target tool, for example gmail.",
+        },
+        tool_slug: {
+          type: "string",
+          description: "Composio tool slug that will consume the file.",
+        },
+        filename: {
+          type: "string",
+          description: "File name to register with Composio.",
+        },
+        mimetype: {
+          type: "string",
+          description: "File MIME type, for example application/pdf.",
+        },
+        md5: {
+          type: "string",
+          description: "Base64 or hex MD5 checksum expected by Composio for the file.",
+        },
+      },
+      required: ["toolkit", "tool_slug", "filename", "mimetype", "md5"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      for (const key of ["toolkit", "tool_slug", "filename", "mimetype", "md5"]) {
+        if (!params[key] || typeof params[key] !== "string") {
+          return { success: false, error: `${key} is required and must be a string` };
+        }
+      }
+
+      const body = {
+        toolkit_slug: normalizeToolkitSlug(params.toolkit),
+        tool_slug: normalizeToolSlug(params.tool_slug),
+        filename: params.filename,
+        mimetype: params.mimetype,
+        md5: params.md5,
+      };
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: "/files/upload/request",
+          method: "POST",
+          body,
+        });
+        if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
+          return failedResponse("Could not request file upload", response);
+        }
+
+        return {
+          success: true,
+          data: {
+            file: {
+              id: response.data.id ?? null,
+              key: response.data.key ?? null,
+              presigned_url:
+                response.data.new_presigned_url ??
+                response.data.newPresignedUrl ??
+                response.data.presigned_url ??
+                null,
+              type: response.data.type ?? null,
+              toolkit_slug: body.toolkit_slug,
+              tool_slug: body.tool_slug,
+              filename: body.filename,
+              mimetype: body.mimetype,
+              md5: body.md5,
+            },
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not request file upload: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 12: composio_list_trigger_types
+  // -------------------------------------------------------------------------
+
+  const composioListTriggerTypes = {
+    name: "composio_list_trigger_types",
+    description:
+      "List Composio v3 trigger type schemas by toolkit so the agent can configure automation triggers.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        toolkit: {
+          type: "string",
+          description: "Filter by one toolkit slug.",
+        },
+        toolkits: {
+          type: "array",
+          description: "Filter by multiple toolkit slugs.",
+          items: { type: "string" },
+        },
+        toolkit_versions: {
+          description: "Toolkit version selector, for example latest.",
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by a previous call.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum trigger types to return (1-1000, default: 50).",
+          minimum: 1,
+          maximum: 1000,
+        },
+      },
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const { toolkitVersions } = getConfig();
+      const qs = new URLSearchParams();
+      const toolkits = [
+        ...normalizeStringArray(params.toolkit),
+        ...normalizeStringArray(params.toolkits),
+      ].map(normalizeToolkitSlug);
+      appendArrayParams(qs, "toolkit_slugs", [...new Set(toolkits)]);
+      appendToolkitVersions(qs, params.toolkit_versions ?? toolkitVersions);
+      qs.set("limit", String(normalizeLimit(params.limit, 50, 1000)));
+      if (params.cursor) qs.set("cursor", String(params.cursor));
+
+      try {
+        const response = await callComposio({ apiKey, path: "/triggers_types", query: qs });
+        if (response.status !== 200) {
+          return failedResponse("Could not list trigger types", response);
+        }
+
+        const triggerTypes = extractItems(response.data).map(formatTriggerType);
+        return {
+          success: true,
+          data: {
+            trigger_types: triggerTypes,
+            count: triggerTypes.length,
+            ...paginationFrom(response.data),
+            filters: {
+              toolkit_slugs: [...new Set(toolkits)],
+            },
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list trigger types: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 13: composio_get_trigger_type
+  // -------------------------------------------------------------------------
+
+  const composioGetTriggerType = {
+    name: "composio_get_trigger_type",
+    description:
+      "Get one Composio v3 trigger type schema by trigger slug before creating or updating a trigger instance.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        trigger_slug: {
+          type: "string",
+          description: "Composio trigger type slug, for example SLACK_RECEIVE_MESSAGE.",
+        },
+        toolkit_versions: {
+          description: "Toolkit version selector, for example latest.",
+        },
+      },
+      required: ["trigger_slug"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.trigger_slug || typeof params.trigger_slug !== "string") {
+        return { success: false, error: "trigger_slug is required and must be a string" };
+      }
+
+      const { toolkitVersions } = getConfig();
+      const qs = new URLSearchParams();
+      appendToolkitVersions(qs, params.toolkit_versions ?? toolkitVersions);
+      const triggerSlug = normalizeToolSlug(params.trigger_slug);
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/triggers_types/${encodeURIComponent(triggerSlug)}`,
+          query: qs,
+        });
+        if (response.status !== 200 || !isRecord(response.data)) {
+          return failedResponse(`Could not get trigger type ${triggerSlug}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            trigger_type: formatTriggerType(response.data),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not get trigger type ${triggerSlug}: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 14: composio_list_triggers
+  // -------------------------------------------------------------------------
+
+  const composioListTriggers = {
+    name: "composio_list_triggers",
+    description:
+      "List active Composio trigger instances. Defaults to the current Teleton sender so agents avoid reusing another user's automation.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        trigger_name: {
+          type: "string",
+          description: "Filter by one trigger type slug.",
+        },
+        trigger_names: {
+          type: "array",
+          description: "Filter by multiple trigger type slugs.",
+          items: { type: "string" },
+        },
+        connected_account_id: {
+          type: "string",
+          description: "Filter by one connected account ID.",
+        },
+        connected_account_ids: {
+          type: "array",
+          description: "Filter by multiple connected account IDs.",
+          items: { type: "string" },
+        },
+        user_id: {
+          type: "string",
+          description: "Filter by one Composio user id. Defaults to the current Teleton sender.",
+        },
+        user_ids: {
+          type: "array",
+          description: "Filter by multiple Composio user ids.",
+          items: { type: "string" },
+        },
+        include_all_users: {
+          type: "boolean",
+          description: "When true, do not automatically filter to the current Teleton sender.",
+        },
+        show_disabled: {
+          type: "boolean",
+          description: "Include disabled trigger instances.",
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by a previous call.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum triggers to return (1-1000, default: 50).",
+          minimum: 1,
+          maximum: 1000,
+        },
+      },
+    },
+
+    execute: async (params, context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const qs = new URLSearchParams();
+      const triggerNames = [
+        ...normalizeStringArray(params.trigger_name),
+        ...normalizeStringArray(params.trigger_names),
+      ].map(normalizeToolSlug);
+      const connectedAccountIds = [
+        ...normalizeStringArray(params.connected_account_id),
+        ...normalizeStringArray(params.connected_account_ids),
+      ];
+      const userIds = [
+        ...normalizeStringArray(params.user_id),
+        ...normalizeStringArray(params.user_ids),
+      ];
+
+      if (params.include_all_users !== true && userIds.length === 0) {
+        userIds.push(getUserId(context));
+      }
+
+      appendArrayParams(qs, "trigger_names", [...new Set(triggerNames)]);
+      appendArrayParams(qs, "connected_account_ids", [...new Set(connectedAccountIds)]);
+      appendArrayParams(qs, "user_ids", [...new Set(userIds)]);
+      if (params.show_disabled !== undefined) {
+        qs.set("show_disabled", String(params.show_disabled === true));
+      }
+      qs.set("limit", String(normalizeLimit(params.limit, 50, 1000)));
+      if (params.cursor) qs.set("cursor", String(params.cursor));
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: "/trigger_instances/active",
+          query: qs,
+        });
+        if (response.status !== 200) {
+          return failedResponse("Could not list triggers", response);
+        }
+
+        const triggers = extractItems(response.data).map(formatTriggerInstance);
+        return {
+          success: true,
+          data: {
+            triggers,
+            count: triggers.length,
+            ...paginationFrom(response.data),
+            filters: {
+              trigger_names: [...new Set(triggerNames)],
+              connected_account_ids: [...new Set(connectedAccountIds)],
+              user_ids: [...new Set(userIds)],
+            },
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list triggers: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 15: composio_upsert_trigger
+  // -------------------------------------------------------------------------
+
+  const composioUpsertTrigger = {
+    name: "composio_upsert_trigger",
+    description:
+      "Create or update a Composio v3 trigger instance for a connected account using a trigger type slug and config.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        trigger_slug: {
+          type: "string",
+          description: "Composio trigger type slug, for example SLACK_RECEIVE_MESSAGE.",
+        },
+        connected_account_id: {
+          type: "string",
+          description: "Connected account ID to bind to the trigger.",
+        },
+        trigger_config: {
+          type: "object",
+          description: "Trigger-specific config matching composio_get_trigger_type output.",
+        },
+        toolkit_versions: {
+          description: "Toolkit version selector, for example latest.",
+        },
+      },
+      required: ["trigger_slug", "connected_account_id", "trigger_config"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.trigger_slug || typeof params.trigger_slug !== "string") {
+        return { success: false, error: "trigger_slug is required and must be a string" };
+      }
+      if (!params.connected_account_id || typeof params.connected_account_id !== "string") {
+        return { success: false, error: "connected_account_id is required and must be a string" };
+      }
+      if (!isRecord(params.trigger_config)) {
+        return { success: false, error: "trigger_config is required and must be an object" };
+      }
+
+      const { toolkitVersions } = getConfig();
+      const triggerSlug = normalizeToolSlug(params.trigger_slug);
+      const body = {
+        connected_account_id: params.connected_account_id,
+        trigger_config: params.trigger_config,
+        toolkit_versions: params.toolkit_versions ?? toolkitVersions,
+      };
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/trigger_instances/${encodeURIComponent(triggerSlug)}/upsert`,
+          method: "POST",
+          body,
+        });
+        if (!isOkStatus(response.status, [200, 201, 204])) {
+          return failedResponse(`Could not upsert trigger ${triggerSlug}`, response);
+        }
+
+        const data = isRecord(response.data) ? response.data : {};
+        return {
+          success: true,
+          data: {
+            ...data,
+            trigger_slug: triggerSlug,
+            connected_account_id: params.connected_account_id,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not upsert trigger ${triggerSlug}: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 16: composio_set_trigger_status
+  // -------------------------------------------------------------------------
+
+  const composioSetTriggerStatus = {
+    name: "composio_set_trigger_status",
+    description:
+      "Enable or disable a Composio v3 trigger instance through the trigger manage endpoint.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        trigger_id: {
+          type: "string",
+          description: "Composio trigger instance ID.",
+        },
+        status: {
+          type: "string",
+          enum: ["enable", "disable"],
+          description: "Target trigger status.",
+        },
+        enabled: {
+          type: "boolean",
+          description: "Boolean alias for status; true => enable, false => disable.",
+        },
+      },
+      required: ["trigger_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.trigger_id || typeof params.trigger_id !== "string") {
+        return { success: false, error: "trigger_id is required and must be a string" };
+      }
+
+      const status =
+        params.status ??
+        (typeof params.enabled === "boolean" ? (params.enabled ? "enable" : "disable") : null);
+      if (status !== "enable" && status !== "disable") {
+        return { success: false, error: "status must be 'enable' or 'disable'" };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/trigger_instances/manage/${encodeURIComponent(params.trigger_id)}`,
+          method: "PATCH",
+          body: { status },
+        });
+        if (!isOkStatus(response.status, [200, 204])) {
+          return failedResponse(`Could not set trigger ${params.trigger_id} status`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            trigger_id: params.trigger_id,
+            status,
+            response: response.data,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not set trigger status: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 17: composio_delete_trigger
+  // -------------------------------------------------------------------------
+
+  const composioDeleteTrigger = {
+    name: "composio_delete_trigger",
+    description: "Delete a Composio v3 trigger instance by trigger ID.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        trigger_id: {
+          type: "string",
+          description: "Composio trigger instance ID.",
+        },
+      },
+      required: ["trigger_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.trigger_id || typeof params.trigger_id !== "string") {
+        return { success: false, error: "trigger_id is required and must be a string" };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/trigger_instances/manage/${encodeURIComponent(params.trigger_id)}`,
+          method: "DELETE",
+        });
+        if (!isOkStatus(response.status, [200, 204])) {
+          return failedResponse(`Could not delete trigger ${params.trigger_id}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            trigger_id: params.trigger_id,
+            deleted: true,
+            response: response.data,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not delete trigger: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 18: composio_list_webhook_events
+  // -------------------------------------------------------------------------
+
+  const composioListWebhookEvents = {
+    name: "composio_list_webhook_events",
+    description:
+      "List event types supported by Composio v3 webhook subscriptions.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {},
+    },
+
+    execute: async (_params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: "/webhook_subscriptions/event_types",
+        });
+        if (response.status !== 200) {
+          return failedResponse("Could not list webhook event types", response);
+        }
+
+        const eventTypes = extractItems(response.data).map(formatWebhookEventType);
+        return {
+          success: true,
+          data: {
+            event_types: eventTypes,
+            count: eventTypes.length,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list webhook event types: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 19: composio_list_webhooks
+  // -------------------------------------------------------------------------
+
+  const composioListWebhooks = {
+    name: "composio_list_webhooks",
+    description:
+      "List Composio v3 webhook subscriptions. Webhook signing secrets are redacted unless include_secret is true.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        include_secret: {
+          type: "boolean",
+          description: "Return webhook secret values when Composio includes them. Default: false.",
+        },
+        cursor: {
+          type: "string",
+          description: "Pagination cursor returned by a previous call.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum webhook subscriptions to return (1-1000, default: 50).",
+          minimum: 1,
+          maximum: 1000,
+        },
+      },
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const qs = new URLSearchParams();
+      qs.set("limit", String(normalizeLimit(params.limit, 50, 1000)));
+      if (params.cursor) qs.set("cursor", String(params.cursor));
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: "/webhook_subscriptions",
+          query: qs,
+        });
+        if (response.status !== 200) {
+          return failedResponse("Could not list webhook subscriptions", response);
+        }
+
+        const webhooks = extractItems(response.data).map((item) =>
+          formatWebhookSubscription(item, params.include_secret === true)
+        );
+        return {
+          success: true,
+          data: {
+            webhooks,
+            count: webhooks.length,
+            ...paginationFrom(response.data),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not list webhooks: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 20: composio_get_webhook
+  // -------------------------------------------------------------------------
+
+  const composioGetWebhook = {
+    name: "composio_get_webhook",
+    description:
+      "Get one Composio v3 webhook subscription by ID. Webhook signing secrets are redacted unless include_secret is true.",
+    category: "data-bearing",
+
+    parameters: {
+      type: "object",
+      properties: {
+        webhook_id: {
+          type: "string",
+          description: "Composio webhook subscription ID.",
+        },
+        include_secret: {
+          type: "boolean",
+          description: "Return the webhook secret value when Composio includes it. Default: false.",
+        },
+      },
+      required: ["webhook_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.webhook_id || typeof params.webhook_id !== "string") {
+        return { success: false, error: "webhook_id is required and must be a string" };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
+        });
+        if (response.status !== 200 || !isRecord(response.data)) {
+          return failedResponse(`Could not get webhook ${params.webhook_id}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            webhook: formatWebhookSubscription(response.data, params.include_secret === true),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not get webhook: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 21: composio_create_webhook
+  // -------------------------------------------------------------------------
+
+  const composioCreateWebhook = {
+    name: "composio_create_webhook",
+    description:
+      "Create a Composio v3 webhook subscription for Teleton Agent automation callbacks.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        webhook_url: {
+          type: "string",
+          description: "Webhook callback URL to receive Composio events.",
+        },
+        enabled_events: {
+          type: "array",
+          description: "Event types to enable for this webhook.",
+          items: { type: "string" },
+          minItems: 1,
+        },
+        version: {
+          type: "string",
+          description: "Webhook API version. Defaults to V3.",
+        },
+        include_secret: {
+          type: "boolean",
+          description: "Return the generated signing secret in the tool response. Default: false.",
+        },
+      },
+      required: ["webhook_url", "enabled_events"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.webhook_url || typeof params.webhook_url !== "string") {
+        return { success: false, error: "webhook_url is required and must be a string" };
+      }
+      const enabledEvents = normalizeStringArray(params.enabled_events);
+      if (enabledEvents.length === 0) {
+        return { success: false, error: "enabled_events must include at least one event type" };
+      }
+
+      const body = {
+        webhook_url: params.webhook_url,
+        enabled_events: enabledEvents,
+        version: params.version ?? "V3",
+      };
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: "/webhook_subscriptions",
+          method: "POST",
+          body,
+        });
+        if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
+          return failedResponse("Could not create webhook subscription", response);
+        }
+
+        return {
+          success: true,
+          data: {
+            webhook: formatWebhookSubscription(response.data, params.include_secret === true),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not create webhook: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 22: composio_update_webhook
+  // -------------------------------------------------------------------------
+
+  const composioUpdateWebhook = {
+    name: "composio_update_webhook",
+    description:
+      "Update a Composio v3 webhook subscription URL, enabled events, or version.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        webhook_id: {
+          type: "string",
+          description: "Composio webhook subscription ID.",
+        },
+        webhook_url: {
+          type: "string",
+          description: "Replacement callback URL.",
+        },
+        enabled_events: {
+          type: "array",
+          description: "Replacement event type list.",
+          items: { type: "string" },
+        },
+        version: {
+          type: "string",
+          description: "Replacement webhook API version.",
+        },
+        include_secret: {
+          type: "boolean",
+          description: "Return the webhook secret if Composio includes it. Default: false.",
+        },
+      },
+      required: ["webhook_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.webhook_id || typeof params.webhook_id !== "string") {
+        return { success: false, error: "webhook_id is required and must be a string" };
+      }
+
+      const body = {};
+      if (params.webhook_url) body.webhook_url = params.webhook_url;
+      if (params.enabled_events !== undefined) {
+        body.enabled_events = normalizeStringArray(params.enabled_events);
+      }
+      if (params.version) body.version = params.version;
+      if (Object.keys(body).length === 0) {
+        return {
+          success: false,
+          error: "At least one of webhook_url, enabled_events, or version must be provided",
+        };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
+          method: "PATCH",
+          body,
+        });
+        if (!isOkStatus(response.status, [200, 204]) || (response.status !== 204 && !isRecord(response.data))) {
+          return failedResponse(`Could not update webhook ${params.webhook_id}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            webhook_id: params.webhook_id,
+            webhook: isRecord(response.data)
+              ? formatWebhookSubscription(response.data, params.include_secret === true)
+              : null,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not update webhook: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 23: composio_rotate_webhook_secret
+  // -------------------------------------------------------------------------
+
+  const composioRotateWebhookSecret = {
+    name: "composio_rotate_webhook_secret",
+    description:
+      "Rotate a Composio v3 webhook subscription signing secret. The new secret is redacted unless include_secret is true.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        webhook_id: {
+          type: "string",
+          description: "Composio webhook subscription ID.",
+        },
+        include_secret: {
+          type: "boolean",
+          description: "Return the rotated secret value. Default: false.",
+        },
+      },
+      required: ["webhook_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.webhook_id || typeof params.webhook_id !== "string") {
+        return { success: false, error: "webhook_id is required and must be a string" };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}/rotate_secret`,
+          method: "POST",
+        });
+        if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
+          return failedResponse(`Could not rotate webhook ${params.webhook_id} secret`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            webhook: formatWebhookSubscription(response.data, params.include_secret === true),
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not rotate webhook secret: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 24: composio_delete_webhook
+  // -------------------------------------------------------------------------
+
+  const composioDeleteWebhook = {
+    name: "composio_delete_webhook",
+    description: "Delete a Composio v3 webhook subscription by ID.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        webhook_id: {
+          type: "string",
+          description: "Composio webhook subscription ID.",
+        },
+      },
+      required: ["webhook_id"],
+    },
+
+    execute: async (params, _context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.webhook_id || typeof params.webhook_id !== "string") {
+        return { success: false, error: "webhook_id is required and must be a string" };
+      }
+
+      try {
+        const response = await callComposio({
+          apiKey,
+          path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
+          method: "DELETE",
+        });
+        if (!isOkStatus(response.status, [200, 204])) {
+          return failedResponse(`Could not delete webhook ${params.webhook_id}`, response);
+        }
+
+        return {
+          success: true,
+          data: {
+            webhook_id: params.webhook_id,
+            deleted: true,
+            response: response.data,
+          },
+        };
+      } catch (err) {
+        return { success: false, error: `Could not delete webhook: ${formatApiError(err)}` };
+      }
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 25: composio_manage_connections
+  // -------------------------------------------------------------------------
+
+  const composioManageConnections = {
+    name: "composio_manage_connections",
+    description:
+      "Run Composio's manage_connections meta-tool for one or more toolkits, optionally reinitiating auth links for stale connections.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        toolkits: {
+          type: "array",
+          description: "Toolkit slugs to check or connect. Use values returned by composio_search_tools or composio_list_toolkits.",
+          items: { type: "string" },
+          minItems: 1,
+        },
+        toolkit: {
+          type: "string",
+          description: "Single toolkit slug alias for toolkits.",
+        },
+        reinitiate_all: {
+          type: "boolean",
+          description: "Force reconnection for all requested toolkits. Default: false.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional Composio meta-tool session ID returned by search_tools.",
+        },
+        timeout_override_ms: {
+          type: "integer",
+          description: "Override the default timeout in milliseconds.",
+          minimum: 1000,
+          maximum: 300000,
+        },
+        version: {
+          type: "string",
+          description: "Optional Composio tool version.",
+        },
+      },
+    },
+
+    execute: async (params, context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+
+      const toolkits = [
+        ...normalizeStringArray(params.toolkit),
+        ...normalizeStringArray(params.toolkits),
+      ].map(normalizeToolkitSlug);
+      const uniqueToolkits = [...new Set(toolkits)];
+      if (uniqueToolkits.length === 0) {
+        return { success: false, error: "toolkit or toolkits must include at least one toolkit slug" };
+      }
+
+      const parameters = {
+        toolkits: uniqueToolkits,
+        reinitiate_all: params.reinitiate_all === true,
+      };
+      if (params.session_id) parameters.session_id = params.session_id;
+
+      return composioExecuteTool.execute(
+        {
+          tool_slug: "COMPOSIO_MANAGE_CONNECTIONS",
+          parameters,
+          version: params.version,
+          timeout_override_ms: params.timeout_override_ms,
+        },
+        context
+      );
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 26: composio_remote_bash
+  // -------------------------------------------------------------------------
+
+  const composioRemoteBash = {
+    name: "composio_remote_bash",
+    description:
+      "Execute a shell command through Composio's remote_bash_tool meta-tool. Use only when a Composio remote session/workbench is appropriate.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        command: {
+          type: "string",
+          description: "Shell command for the Composio remote bash tool.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional remote workbench session ID returned by Composio meta-tools.",
+        },
+        timeout_override_ms: {
+          type: "integer",
+          description: "Override the default timeout in milliseconds.",
+          minimum: 1000,
+          maximum: 300000,
+        },
+        version: {
+          type: "string",
+          description: "Optional Composio tool version.",
+        },
+      },
+      required: ["command"],
+    },
+
+    execute: async (params, context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.command || typeof params.command !== "string") {
+        return { success: false, error: "command is required and must be a string" };
+      }
+
+      const parameters = {
+        command: params.command,
+      };
+      if (params.session_id) parameters.session_id = params.session_id;
+
+      return composioExecuteTool.execute(
+        {
+          tool_slug: "COMPOSIO_REMOTE_BASH_TOOL",
+          parameters,
+          version: params.version,
+          timeout_override_ms: params.timeout_override_ms,
+        },
+        context
+      );
+    },
+  };
+
+  // -------------------------------------------------------------------------
+  // Tool 27: composio_remote_workbench
+  // -------------------------------------------------------------------------
+
+  const composioRemoteWorkbench = {
+    name: "composio_remote_workbench",
+    description:
+      "Execute Python/code workbench steps through Composio's remote_workbench meta-tool for remote analysis workflows.",
+    category: "action",
+    scope: "dm-only",
+
+    parameters: {
+      type: "object",
+      properties: {
+        code_to_execute: {
+          type: "string",
+          description: "Code to execute in the Composio remote workbench.",
+        },
+        thought: {
+          type: "string",
+          description: "Optional reasoning/thought field expected by the remote workbench meta-tool.",
+        },
+        session_id: {
+          type: "string",
+          description: "Optional remote workbench session ID.",
+        },
+        current_step: {
+          type: "string",
+          description: "Optional current step label for the remote workbench.",
+        },
+        current_step_metric: {
+          type: "string",
+          description: "Optional metric/status label for the current workbench step.",
+        },
+        timeout_override_ms: {
+          type: "integer",
+          description: "Override the default timeout in milliseconds.",
+          minimum: 1000,
+          maximum: 300000,
+        },
+        version: {
+          type: "string",
+          description: "Optional Composio tool version.",
+        },
+      },
+      required: ["code_to_execute"],
+    },
+
+    execute: async (params, context) => {
+      const apiKey = getApiKey();
+      if (!apiKey) return notConfiguredError();
+      if (!params.code_to_execute || typeof params.code_to_execute !== "string") {
+        return { success: false, error: "code_to_execute is required and must be a string" };
+      }
+
+      const parameters = {
+        code_to_execute: params.code_to_execute,
+      };
+      if (params.thought) parameters.thought = params.thought;
+      if (params.session_id) parameters.session_id = params.session_id;
+      if (params.current_step) parameters.current_step = params.current_step;
+      if (params.current_step_metric) parameters.current_step_metric = params.current_step_metric;
+
+      return composioExecuteTool.execute(
+        {
+          tool_slug: "COMPOSIO_REMOTE_WORKBENCH",
+          parameters,
+          version: params.version,
+          timeout_override_ms: params.timeout_override_ms,
+        },
+        context
+      );
+    },
+  };
+
   return [
     composioSearchTools,
     composioGetToolSchemas,
@@ -1912,6 +3578,26 @@ export const tools = (sdk) => {
     composioAuthLink,
     composioListConnections,
     composioGetConnection,
+    composioListToolkits,
+    composioGetToolkit,
+    composioListFiles,
+    composioRequestFileUpload,
+    composioListTriggerTypes,
+    composioGetTriggerType,
+    composioListTriggers,
+    composioUpsertTrigger,
+    composioSetTriggerStatus,
+    composioDeleteTrigger,
+    composioListWebhookEvents,
+    composioListWebhooks,
+    composioGetWebhook,
+    composioCreateWebhook,
+    composioUpdateWebhook,
+    composioRotateWebhookSecret,
+    composioDeleteWebhook,
+    composioManageConnections,
+    composioRemoteBash,
+    composioRemoteWorkbench,
   ];
 };
 

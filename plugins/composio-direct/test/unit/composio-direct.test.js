@@ -110,6 +110,36 @@ function mockFetchHandler(handler) {
 // Dynamic import so we can mock fetch before each test
 const { tools: toolsFactory, manifest } = await import("../../index.js");
 
+const expectedToolNames = [
+  "composio_auth_link",
+  "composio_create_webhook",
+  "composio_delete_trigger",
+  "composio_delete_webhook",
+  "composio_execute_tool",
+  "composio_get_connection",
+  "composio_get_tool_schemas",
+  "composio_get_toolkit",
+  "composio_get_trigger_type",
+  "composio_get_webhook",
+  "composio_list_connections",
+  "composio_list_files",
+  "composio_list_toolkits",
+  "composio_list_trigger_types",
+  "composio_list_triggers",
+  "composio_list_webhook_events",
+  "composio_list_webhooks",
+  "composio_manage_connections",
+  "composio_multi_execute",
+  "composio_remote_bash",
+  "composio_remote_workbench",
+  "composio_request_file_upload",
+  "composio_rotate_webhook_secret",
+  "composio_search_tools",
+  "composio_set_trigger_status",
+  "composio_update_webhook",
+  "composio_upsert_trigger",
+];
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -119,25 +149,17 @@ describe("manifest", () => {
     assert.ok(manifest.name, "manifest.name is set");
     assert.ok(manifest.version, "manifest.version is set");
     assert.ok(manifest.secrets?.composio_api_key, "secret composio_api_key declared");
-    assert.equal(manifest.version, "1.7.0");
+    assert.equal(manifest.version, "1.8.0");
     assert.equal(manifest.defaultConfig?.base_url, "https://backend.composio.dev/api/v3");
   });
 });
 
 describe("tools factory", () => {
-  it("returns schema, connection, and execution tools when called with sdk", () => {
+  it("returns Composio v3 API domain, meta-tool, and execution tools when called with sdk", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
     const names = toolList.map((t) => t.name);
-    assert.deepEqual(names.sort(), [
-      "composio_auth_link",
-      "composio_execute_tool",
-      "composio_get_connection",
-      "composio_get_tool_schemas",
-      "composio_list_connections",
-      "composio_multi_execute",
-      "composio_search_tools",
-    ]);
+    assert.deepEqual(names.sort(), expectedToolNames);
   });
 });
 

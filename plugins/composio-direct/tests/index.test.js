@@ -3,6 +3,36 @@ import assert from "node:assert/strict";
 
 const { tools: toolsFactory, manifest } = await import("../index.js");
 
+const expectedToolNames = [
+  "composio_auth_link",
+  "composio_create_webhook",
+  "composio_delete_trigger",
+  "composio_delete_webhook",
+  "composio_execute_tool",
+  "composio_get_connection",
+  "composio_get_tool_schemas",
+  "composio_get_toolkit",
+  "composio_get_trigger_type",
+  "composio_get_webhook",
+  "composio_list_connections",
+  "composio_list_files",
+  "composio_list_toolkits",
+  "composio_list_trigger_types",
+  "composio_list_triggers",
+  "composio_list_webhook_events",
+  "composio_list_webhooks",
+  "composio_manage_connections",
+  "composio_multi_execute",
+  "composio_remote_bash",
+  "composio_remote_workbench",
+  "composio_request_file_upload",
+  "composio_rotate_webhook_secret",
+  "composio_search_tools",
+  "composio_set_trigger_status",
+  "composio_update_webhook",
+  "composio_upsert_trigger",
+];
+
 function makeSdk({ apiKey = "test-api-key", pluginConfig = {} } = {}) {
   return {
     secrets: {
@@ -62,19 +92,11 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.7.0");
+    assert.equal(manifest.version, "1.8.0");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3");
     assert.deepEqual(
       toolList.map((tool) => tool.name).sort(),
-      [
-        "composio_auth_link",
-        "composio_execute_tool",
-        "composio_get_connection",
-        "composio_get_tool_schemas",
-        "composio_list_connections",
-        "composio_multi_execute",
-        "composio_search_tools",
-      ]
+      expectedToolNames
     );
   });
 
@@ -567,6 +589,454 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.data.connection.state, undefined);
       assert.deepEqual(result.data.connection.state_keys, ["refresh_token"]);
       assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists toolkits through the current /toolkits API", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      const url = new URL(call.url);
+      assert.equal(url.pathname, "/api/v3/toolkits");
+      assert.equal(url.searchParams.get("search"), "github");
+      assert.equal(url.searchParams.get("category"), "developer-tools");
+      assert.equal(url.searchParams.get("managed_by"), "composio");
+      assert.equal(url.searchParams.get("sort_by"), "usage");
+      assert.equal(url.searchParams.get("include_deprecated"), "false");
+      assert.equal(url.searchParams.get("limit"), "10");
+      return {
+        status: 200,
+        data: {
+          items: [
+            {
+              slug: "github",
+              name: "GitHub",
+              auth_schemes: ["oauth2"],
+              composio_managed_auth_schemes: ["oauth2"],
+              no_auth: false,
+              meta: {
+                description: "GitHub tools",
+                tools_count: 12,
+                triggers_count: 5,
+                version: "20250905_00",
+              },
+            },
+          ],
+          total_items: 1,
+        },
+      };
+    });
+
+    try {
+      const listTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_list_toolkits");
+      const result = await listTool.execute(
+        {
+          search: "github",
+          category: "developer-tools",
+          managed_by: "composio",
+          sort_by: "usage",
+          limit: 10,
+        },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.count, 1);
+      assert.equal(result.data.toolkits[0].slug, "github");
+      assert.equal(result.data.toolkits[0].meta.tools_count, 12);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("gets one toolkit through /toolkits/{slug}", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      const url = new URL(call.url);
+      assert.equal(url.pathname, "/api/v3/toolkits/github");
+      assert.equal(url.searchParams.get("version"), "latest");
+      return {
+        status: 200,
+        data: {
+          slug: "github",
+          name: "GitHub",
+          enabled: true,
+          auth_config_details: [{ mode: "oauth2" }],
+          meta: { description: "GitHub tools" },
+        },
+      };
+    });
+
+    try {
+      const getTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_get_toolkit");
+      const result = await getTool.execute({ toolkit: "github" }, makeContext());
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.toolkit.slug, "github");
+      assert.equal(result.data.toolkit.enabled, true);
+      assert.deepEqual(result.data.toolkit.auth_config_details, [{ mode: "oauth2" }]);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists files and requests a presigned upload URL through the files API", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      const url = new URL(call.url);
+      if (idx === 1) {
+        assert.equal(url.pathname, "/api/v3/files/list");
+        assert.equal(url.searchParams.get("toolkit_slug"), "gmail");
+        assert.equal(url.searchParams.get("tool_slug"), "GMAIL_SEND_EMAIL");
+        assert.equal(url.searchParams.get("limit"), "25");
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                toolkit_slug: "gmail",
+                tool_slug: "GMAIL_SEND_EMAIL",
+                filename: "report.pdf",
+                mimetype: "application/pdf",
+                md5: "abc123",
+              },
+            ],
+            total_items: 1,
+          },
+        };
+      }
+
+      assert.equal(url.pathname, "/api/v3/files/upload/request");
+      assert.deepEqual(call.body, {
+        toolkit_slug: "gmail",
+        tool_slug: "GMAIL_SEND_EMAIL",
+        filename: "report.pdf",
+        mimetype: "application/pdf",
+        md5: "abc123",
+      });
+      return {
+        status: 200,
+        data: {
+          id: "file_123",
+          key: "uploads/report.pdf",
+          new_presigned_url: "https://s3.example.test/upload",
+          type: "new",
+        },
+      };
+    });
+
+    try {
+      const toolList = toolsFactory(makeSdk());
+      const listFiles = toolList.find((tool) => tool.name === "composio_list_files");
+      const requestUpload = toolList.find((tool) => tool.name === "composio_request_file_upload");
+
+      const listResult = await listFiles.execute(
+        { toolkit: "gmail", tool_slug: "gmail_send_email", limit: 25 },
+        makeContext()
+      );
+      const uploadResult = await requestUpload.execute(
+        {
+          toolkit: "gmail",
+          tool_slug: "gmail_send_email",
+          filename: "report.pdf",
+          mimetype: "application/pdf",
+          md5: "abc123",
+        },
+        makeContext()
+      );
+
+      assert.equal(listResult.success, true);
+      assert.equal(listResult.data.files[0].filename, "report.pdf");
+      assert.equal(uploadResult.success, true);
+      assert.equal(uploadResult.data.file.id, "file_123");
+      assert.equal(uploadResult.data.file.presigned_url, "https://s3.example.test/upload");
+      assert.equal(calls.length, 2);
+    } finally {
+      restore();
+    }
+  });
+
+  it("lists trigger types, active triggers, and upserts trigger instances through v3 endpoints", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      const url = new URL(call.url);
+      if (idx === 1) {
+        assert.equal(url.pathname, "/api/v3/triggers_types");
+        assert.deepEqual(url.searchParams.getAll("toolkit_slugs"), ["slack"]);
+        assert.equal(url.searchParams.get("toolkit_versions"), "latest");
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                slug: "SLACK_RECEIVE_MESSAGE",
+                name: "New message",
+                type: "webhook",
+                toolkit: { slug: "slack", name: "Slack" },
+                config: { channel_id: { type: "string", required: true } },
+                payload: { message: { type: "string" } },
+              },
+            ],
+          },
+        };
+      }
+      if (idx === 2) {
+        assert.equal(url.pathname, "/api/v3/trigger_instances/active");
+        assert.deepEqual(url.searchParams.getAll("user_ids"), ["user-42"]);
+        assert.deepEqual(url.searchParams.getAll("trigger_names"), ["SLACK_RECEIVE_MESSAGE"]);
+        assert.equal(url.searchParams.get("show_disabled"), "true");
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                id: "trig_123",
+                connected_account_id: "ca_123",
+                user_id: "user-42",
+                trigger_name: "SLACK_RECEIVE_MESSAGE",
+                state: { cursor: "secret-ish-state" },
+              },
+            ],
+          },
+        };
+      }
+
+      assert.equal(url.pathname, "/api/v3/trigger_instances/SLACK_RECEIVE_MESSAGE/upsert");
+      assert.deepEqual(call.body, {
+        connected_account_id: "ca_123",
+        trigger_config: { channel_id: "C123" },
+        toolkit_versions: "latest",
+      });
+      return { status: 201, data: { trigger_id: "trig_123" } };
+    });
+
+    try {
+      const toolList = toolsFactory(makeSdk());
+      const listTypes = toolList.find((tool) => tool.name === "composio_list_trigger_types");
+      const listTriggers = toolList.find((tool) => tool.name === "composio_list_triggers");
+      const upsertTrigger = toolList.find((tool) => tool.name === "composio_upsert_trigger");
+
+      const typesResult = await listTypes.execute({ toolkit: "slack" }, makeContext());
+      const triggersResult = await listTriggers.execute(
+        { trigger_name: "slack_receive_message", show_disabled: true },
+        makeContext({ senderId: "user-42" })
+      );
+      const upsertResult = await upsertTrigger.execute(
+        {
+          trigger_slug: "slack_receive_message",
+          connected_account_id: "ca_123",
+          trigger_config: { channel_id: "C123" },
+        },
+        makeContext()
+      );
+
+      assert.equal(typesResult.success, true);
+      assert.equal(typesResult.data.trigger_types[0].slug, "SLACK_RECEIVE_MESSAGE");
+      assert.equal(triggersResult.success, true);
+      assert.equal(triggersResult.data.triggers[0].state, undefined);
+      assert.deepEqual(triggersResult.data.triggers[0].state_keys, ["cursor"]);
+      assert.equal(upsertResult.success, true);
+      assert.equal(upsertResult.data.trigger_id, "trig_123");
+      assert.equal(calls.length, 3);
+    } finally {
+      restore();
+    }
+  });
+
+  it("manages trigger status and deletion through v3 trigger manage endpoints", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      const url = new URL(call.url);
+      if (idx === 1) {
+        assert.equal(call.method, "PATCH");
+        assert.equal(url.pathname, "/api/v3/trigger_instances/manage/trig_123");
+        assert.deepEqual(call.body, { status: "disable" });
+        return { status: 200, data: { success: true } };
+      }
+
+      assert.equal(call.method, "DELETE");
+      assert.equal(url.pathname, "/api/v3/trigger_instances/manage/trig_123");
+      return { status: 200, data: { success: true } };
+    });
+
+    try {
+      const toolList = toolsFactory(makeSdk());
+      const statusTool = toolList.find((tool) => tool.name === "composio_set_trigger_status");
+      const deleteTool = toolList.find((tool) => tool.name === "composio_delete_trigger");
+
+      const statusResult = await statusTool.execute(
+        { trigger_id: "trig_123", status: "disable" },
+        makeContext()
+      );
+      const deleteResult = await deleteTool.execute({ trigger_id: "trig_123" }, makeContext());
+
+      assert.equal(statusResult.success, true);
+      assert.equal(deleteResult.success, true);
+      assert.equal(calls.length, 2);
+    } finally {
+      restore();
+    }
+  });
+
+  it("manages webhook subscriptions without exposing secrets by default", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      const url = new URL(call.url);
+      if (idx === 1) {
+        assert.equal(url.pathname, "/api/v3/webhook_subscriptions/event_types");
+        return {
+          status: 200,
+          data: {
+            items: [
+              {
+                event_type: "trigger.event_received",
+                description: "Trigger event received",
+                supported_versions: ["V3"],
+              },
+            ],
+          },
+        };
+      }
+      if (idx === 2) {
+        assert.equal(call.method, "POST");
+        assert.equal(url.pathname, "/api/v3/webhook_subscriptions");
+        assert.deepEqual(call.body, {
+          webhook_url: "https://agent.example.test/composio",
+          enabled_events: ["trigger.event_received"],
+          version: "V3",
+        });
+        return {
+          status: 201,
+          data: {
+            id: "wh_123",
+            webhook_url: "https://agent.example.test/composio",
+            enabled_events: ["trigger.event_received"],
+            version: "V3",
+            secret: "secret-value",
+          },
+        };
+      }
+      if (idx === 3) {
+        assert.equal(call.method, "PATCH");
+        assert.equal(url.pathname, "/api/v3/webhook_subscriptions/wh_123");
+        return {
+          status: 200,
+          data: {
+            id: "wh_123",
+            webhook_url: "https://agent.example.test/composio/v2",
+            enabled_events: ["trigger.event_received"],
+            version: "V3",
+            secret: "updated-secret",
+          },
+        };
+      }
+
+      assert.equal(call.method, "POST");
+      assert.equal(url.pathname, "/api/v3/webhook_subscriptions/wh_123/rotate_secret");
+      return {
+        status: 200,
+        data: {
+          id: "wh_123",
+          webhook_url: "https://agent.example.test/composio/v2",
+          enabled_events: ["trigger.event_received"],
+          version: "V3",
+          secret: "rotated-secret",
+        },
+      };
+    });
+
+    try {
+      const toolList = toolsFactory(makeSdk());
+      const listEvents = toolList.find((tool) => tool.name === "composio_list_webhook_events");
+      const createWebhook = toolList.find((tool) => tool.name === "composio_create_webhook");
+      const updateWebhook = toolList.find((tool) => tool.name === "composio_update_webhook");
+      const rotateSecret = toolList.find((tool) => tool.name === "composio_rotate_webhook_secret");
+
+      const eventsResult = await listEvents.execute({}, makeContext());
+      const createResult = await createWebhook.execute(
+        {
+          webhook_url: "https://agent.example.test/composio",
+          enabled_events: ["trigger.event_received"],
+        },
+        makeContext()
+      );
+      const updateResult = await updateWebhook.execute(
+        {
+          webhook_id: "wh_123",
+          webhook_url: "https://agent.example.test/composio/v2",
+        },
+        makeContext()
+      );
+      const rotateResult = await rotateSecret.execute({ webhook_id: "wh_123" }, makeContext());
+
+      assert.equal(eventsResult.success, true);
+      assert.equal(eventsResult.data.event_types[0].event_type, "trigger.event_received");
+      assert.equal(createResult.success, true);
+      assert.equal(createResult.data.webhook.secret, undefined);
+      assert.equal(createResult.data.webhook.secret_present, true);
+      assert.equal(updateResult.data.webhook.secret, undefined);
+      assert.equal(rotateResult.data.webhook.secret, undefined);
+      assert.equal(calls.length, 4);
+    } finally {
+      restore();
+    }
+  });
+
+  it("wraps manage connections, remote bash, and workbench meta-tools through composio_execute_tool", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      const url = new URL(call.url);
+      if (idx === 1) {
+        assert.equal(url.pathname, "/api/v3/tools/execute/COMPOSIO_MANAGE_CONNECTIONS");
+        assert.deepEqual(call.body.arguments, {
+          toolkits: ["github", "gmail"],
+          reinitiate_all: true,
+          session_id: "sess_123",
+        });
+        return { status: 200, data: { successful: true, data: { connected: ["github"] } } };
+      }
+      if (idx === 2) {
+        assert.equal(url.pathname, "/api/v3/tools/execute/COMPOSIO_REMOTE_BASH_TOOL");
+        assert.equal(call.body.arguments.command, "pwd");
+        assert.equal(call.body.arguments.session_id, "sess_123");
+        return { status: 200, data: { successful: true, data: { stdout: "/workspace" } } };
+      }
+
+      assert.equal(url.pathname, "/api/v3/tools/execute/COMPOSIO_REMOTE_WORKBENCH");
+      assert.equal(call.body.arguments.code_to_execute, "print(1)");
+      assert.equal(call.body.arguments.current_step, "RUNNING_CODE");
+      return { status: 200, data: { successful: true, data: { result: 1 } } };
+    });
+
+    try {
+      const toolList = toolsFactory(makeSdk());
+      const manageConnections = toolList.find((tool) => tool.name === "composio_manage_connections");
+      const remoteBash = toolList.find((tool) => tool.name === "composio_remote_bash");
+      const remoteWorkbench = toolList.find((tool) => tool.name === "composio_remote_workbench");
+
+      const manageResult = await manageConnections.execute(
+        {
+          toolkits: ["github", "gmail"],
+          reinitiate_all: true,
+          session_id: "sess_123",
+        },
+        makeContext()
+      );
+      const bashResult = await remoteBash.execute(
+        { command: "pwd", session_id: "sess_123" },
+        makeContext()
+      );
+      const workbenchResult = await remoteWorkbench.execute(
+        {
+          code_to_execute: "print(1)",
+          current_step: "RUNNING_CODE",
+        },
+        makeContext()
+      );
+
+      assert.equal(manageResult.success, true);
+      assert.deepEqual(manageResult.data.connected, ["github"]);
+      assert.equal(bashResult.success, true);
+      assert.equal(bashResult.data.stdout, "/workspace");
+      assert.equal(workbenchResult.success, true);
+      assert.equal(workbenchResult.data.result, 1);
+      assert.equal(calls.length, 3);
     } finally {
       restore();
     }
