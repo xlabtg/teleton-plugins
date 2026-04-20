@@ -145,6 +145,42 @@ or:
 
 Network failures, API errors, validation errors, and missing secrets are converted to `success: false` results for the LLM.
 
+## Live Smoke And Readiness
+
+The repo includes a credential-gated live smoke runner for final broker validation:
+
+```bash
+npm run finam:live-smoke -- --dry-run
+FINAM_SECRET=... FINAM_LIVE_ACCOUNT_ID=... npm run finam:live-smoke
+```
+
+By default it runs only non-trading checks:
+
+- `finam_get_accounts`
+- `finam_get_account_info`
+- `finam_generate_report`
+- real JWT session creation and pre-expiry refresh
+- real `401`/`403` recovery after an intentionally invalid cached JWT
+- negative auth failure with an invalid secret
+
+Trading smoke checks require explicit opt-in and explicit payloads so the script never invents live order terms:
+
+```bash
+FINAM_SECRET=... \
+FINAM_LIVE_ENABLE_TRADING=1 \
+FINAM_LIVE_PLACE_ORDER_JSON='{"account_id":"ACCOUNT_ID","symbol":"SBER@MISX","quantity":"1","side":"buy","type":"limit","limit_price":"1"}' \
+FINAM_LIVE_SLTP_JSON='{"account_id":"ACCOUNT_ID","symbol":"SBER@MISX","side":"sell","quantity_sl":"1","sl_price":"1"}' \
+npm run finam:live-smoke
+```
+
+Returned order IDs are cancelled by default. Set `FINAM_LIVE_CANCEL_CREATED_ORDERS=0` only when cleanup is handled outside the script. Use a non-production account or the safest broker-provided test environment.
+
 ## REST And gRPC Scope
 
 The current Teleton tools expose Finam's REST request/response operations. The gRPC integration is implemented for `AuthService.SubscribeJwtRenewal`, which is the gRPC-specific token renewal stream recommended by the Finam docs. Market, account, order, and report streaming subscriptions are not exposed as Teleton tools yet.
+
+Known production-readiness limits:
+
+- Live broker smoke evidence depends on a real non-production `FINAM_SECRET` and test account; do not treat green unit/CI checks alone as proof that order/report flows work against a broker account.
+- The smoke runner can verify that optional gRPC JWT renewal starts without breaking REST requests by setting `FINAM_LIVE_ENABLE_GRPC=1`.
+- Broader Finam gRPC market/account/order/report streaming tools are intentionally out of scope for this PR.

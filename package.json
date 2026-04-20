@@ -8,7 +8,8 @@
     "validate": "node scripts/validate-plugins.mjs",
     "lint": "eslint \"plugins/**/*.js\" \"scripts/**/*.mjs\"",
     "test": "node scripts/run-tests.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "finam:live-smoke": "node experiments/finam-live-smoke.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",
