@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 
 import { FinamAuth } from "../src/auth.js";
-import { FinamGrpcJwtRenewal } from "../src/grpc.js";
+import { FinamGrpcJwtRenewal, normalizeGrpcTarget } from "../src/grpc.js";
 
 function jwtWithExp(exp) {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
@@ -147,4 +147,13 @@ test("FinamAuth can accept fresh JWTs from the gRPC renewal stream", async () =>
   auth.stopJwtRenewal();
   assert.equal(cancelled, true);
   assert.deepEqual(calls.at(-1), ["close"]);
+});
+
+test("normalizeGrpcTarget keeps only a safe gRPC authority", () => {
+  assert.equal(normalizeGrpcTarget("api.finam.ru:443"), "api.finam.ru:443");
+  assert.equal(normalizeGrpcTarget("https://api.finam.ru:443/v1/auth?debug=1#renewal"), "api.finam.ru:443");
+  assert.equal(normalizeGrpcTarget(`https://api.finam.ru:443/${"#".repeat(10_000)}`), "api.finam.ru:443");
+
+  assert.throws(() => normalizeGrpcTarget("http://api.finam.ru:443"), /HTTPS/);
+  assert.throws(() => normalizeGrpcTarget("https://[::1]:443"), /local|private/i);
 });
