@@ -1,0 +1,8 @@
+{
+  "name": "teleton-plugin-finam-trade",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Teleton plugin for Finam Trade API tools",
+  "dependencies": {}
+}
