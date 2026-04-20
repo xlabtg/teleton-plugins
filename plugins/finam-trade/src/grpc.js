@@ -1,27 +1,53 @@
-import grpc from "@grpc/grpc-js";
-import protoLoader from "@grpc/proto-loader";
+import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertSafeHttpsUrl, formatError } from "./utils.js";
 
-const PROTO_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../proto/auth_service.proto");
+const __dir = dirname(fileURLToPath(import.meta.url));
+const PROTO_PATH = resolve(__dir, "../proto/auth_service.proto");
+
+function loadGrpcLibs() {
+  const req = createRequire(import.meta.url);
+  return {
+    grpc: req("@grpc/grpc-js"),
+    protoLoader: req("@grpc/proto-loader"),
+  };
+}
 
 export class FinamGrpcJwtRenewal {
   constructor({
     grpcBase = "api.finam.ru:443",
     sdk = {},
-    grpcLib = grpc,
-    protoLoaderLib = protoLoader,
+    grpcLib = null,
+    protoLoaderLib = null,
     protoPath = PROTO_PATH,
   } = {}) {
     this.grpcBase = normalizeGrpcTarget(grpcBase);
     this.sdk = sdk;
-    this.grpc = grpcLib;
-    this.protoLoader = protoLoaderLib;
+    this._grpcLib = grpcLib;
+    this._protoLoaderLib = protoLoaderLib;
     this.protoPath = protoPath;
     this.client = null;
     this.stream = null;
+  }
+
+  get grpc() {
+    if (!this._grpcLib) {
+      const libs = loadGrpcLibs();
+      this._grpcLib = libs.grpc;
+      this._protoLoaderLib = libs.protoLoader;
+    }
+    return this._grpcLib;
+  }
+
+  get protoLoader() {
+    if (!this._protoLoaderLib) {
+      const libs = loadGrpcLibs();
+      this._grpcLib = libs.grpc;
+      this._protoLoaderLib = libs.protoLoader;
+    }
+    return this._protoLoaderLib;
   }
 
   start({ secret, onToken }) {
