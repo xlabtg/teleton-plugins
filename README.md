@@ -3,8 +3,8 @@
 # teleton-plugins
 
 [![GitHub stars](https://img.shields.io/github/stars/TONresistor/teleton-plugins?style=flat&logo=github)](https://github.com/TONresistor/teleton-plugins/stargazers)
-[![Plugins](https://img.shields.io/badge/plugins-28-8B5CF6.svg)](#available-plugins)
-[![Tools](https://img.shields.io/badge/tools-249-E040FB.svg)](#available-plugins)
+[![Plugins](https://img.shields.io/badge/plugins-33-8B5CF6.svg)](#available-plugins)
+[![Tools](https://img.shields.io/badge/tools-366-E040FB.svg)](#available-plugins)
 [![SDK](https://img.shields.io/badge/SDK-v1.0.0-00C896.svg)](#plugin-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -76,13 +76,14 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 ## Available Plugins
 
-> **28 plugins** · **316 tools** · [Browse the registry](registry.json)
+> **33 plugins** · **366 tools** · [Browse the registry](registry.json)
 
 ### DeFi & Trading
 
 | Plugin | Description | Tools | Author |
 |--------|-------------|:-----:|--------|
 | [ton-trading-bot](plugins/ton-trading-bot/) | Atomic TON trading tools — market data, portfolio, risk validation, simulation, DEX swap | 41 | xlabtg |
+| [finam-trade](plugins/finam-trade/) | Finam Trade API - accounts, orders, market data, instruments, reports, usage | 27 | Teleton Community |
 | [gaspump](plugins/gaspump/) | Launch, trade, and manage meme tokens on Gas111/TON | 13 | teleton |
 | [stormtrade](plugins/stormtrade/) | Perpetual futures — crypto, stocks, forex, commodities | 13 | teleton |
 | [evaa](plugins/evaa/) | EVAA Protocol — supply, borrow, withdraw, repay, liquidate | 11 | teleton |

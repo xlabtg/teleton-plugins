@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package grpc.tradeapi.v1.auth;
+
+service AuthService {
+  rpc SubscribeJwtRenewal(SubscribeJwtRenewalRequest) returns (stream SubscribeJwtRenewalResponse);
+}
+
+message SubscribeJwtRenewalRequest {
+  string secret = 1;
+}
+
+message SubscribeJwtRenewalResponse {
+  string token = 1;
+}
