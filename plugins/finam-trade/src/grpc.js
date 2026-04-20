@@ -72,7 +72,18 @@ export function normalizeGrpcTarget(target) {
   const text = String(target ?? "").trim();
   if (!text) throw new Error("Finam gRPC base target is required.");
 
-  const urlText = /^[a-z][a-z0-9+.-]*:\/\//i.test(text) ? text : `https://${text}`;
+  const urlText = text.includes("://") ? text : `https://${text}`;
   assertSafeHttpsUrl(urlText);
-  return text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/[/?#].*$/, "");
+  return stripGrpcAuthority(text);
+}
+
+function stripGrpcAuthority(target) {
+  const schemeSeparatorIndex = target.indexOf("://");
+  const startIndex = schemeSeparatorIndex === -1 ? 0 : schemeSeparatorIndex + 3;
+  let endIndex = target.length;
+  for (const separator of ["/", "?", "#"]) {
+    const separatorIndex = target.indexOf(separator, startIndex);
+    if (separatorIndex !== -1 && separatorIndex < endIndex) endIndex = separatorIndex;
+  }
+  return target.slice(startIndex, endIndex);
 }
