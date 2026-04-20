@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 
 const args = new Set(process.argv.slice(2));
 const env = process.env;
-const apiBase = env.FINAM_API_BASE || "https://api.finam.ru";
-const grpcBase = env.FINAM_GRPC_BASE || "api.finam.ru:443";
+const DEFAULT_API_BASE = "https://api.finam.ru";
+const DEFAULT_GRPC_BASE = "api.finam.ru:443";
+const apiBase = env.FINAM_API_BASE || DEFAULT_API_BASE;
+const grpcBase = env.FINAM_GRPC_BASE || DEFAULT_GRPC_BASE;
 const timeoutMs = Number(env.FINAM_TIMEOUT_MS || 30_000);
 const requireTradingSmoke = env.FINAM_REQUIRE_TRADING_SMOKE === "1";
 const requireGrpcSmoke = env.FINAM_REQUIRE_GRPC_SMOKE === "1";
@@ -146,9 +148,9 @@ try {
 
 const report = {
   generated_at: new Date().toISOString(),
-  api_base: apiBase,
-  grpc_base: grpcBase,
-  selected_account_id: selectedAccountId ? maskIdentifier(selectedAccountId) : null,
+  api_base_config: apiBase === DEFAULT_API_BASE ? "default" : "custom_https",
+  grpc_base_config: grpcBase === DEFAULT_GRPC_BASE ? "default" : "custom",
+  selected_account: selectedAccountId ? "present" : null,
   steps,
 };
 
@@ -246,16 +248,16 @@ async function runStep(name, fn) {
       name,
       status: "passed",
       duration_ms: Date.now() - started,
-      evidence: redactEvidence(evidence),
+      evidence: summarizeEvidence(name, evidence),
     });
     return evidence;
-  } catch (err) {
+  } catch {
     failureCount += 1;
     steps.push({
       name,
       status: "failed",
       duration_ms: Date.now() - started,
-      error: formatError(err),
+      error: "redacted; rerun locally to inspect the failing live response",
     });
     return null;
   }
@@ -344,27 +346,74 @@ function requireFields(object, fields, sourceName) {
   if (missing.length > 0) throw new Error(`${sourceName} is missing required fields: ${missing.join(", ")}`);
 }
 
-function redactEvidence(value) {
-  if (Array.isArray(value)) return value.map((item) => redactEvidence(item));
-  if (!value || typeof value !== "object") return value;
-
-  const result = {};
-  for (const [key, nested] of Object.entries(value)) {
-    if (/secret|token|authorization/i.test(key)) {
-      result[key] = "[REDACTED]";
-    } else if (/account_id|order_id|report_id/i.test(key) && typeof nested === "string") {
-      result[key] = maskIdentifier(nested);
-    } else {
-      result[key] = redactEvidence(nested);
-    }
-  }
-  return result;
-}
-
 function maskIdentifier(value) {
   const text = String(value ?? "");
   if (text.length <= 8) return `${text.slice(0, 2)}...${text.slice(-2)}`;
   return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function summarizeEvidence(name, evidence = {}) {
+  switch (name) {
+    case "finam_get_accounts":
+      return {
+        account_count: evidence.account_count,
+        selected_account: evidence.selected_account_id ? "present" : null,
+        readonly: evidence.readonly,
+        md_permission_count: evidence.md_permission_count,
+      };
+    case "finam_get_account_info":
+      return {
+        account: evidence.account_id ? "present" : null,
+        type: evidence.type,
+        status: evidence.status,
+        position_count: evidence.position_count,
+        cash_count: evidence.cash_count,
+      };
+    case "finam_generate_report":
+      return {
+        report_id: evidence.report_id ? "present" : null,
+        status: evidence.status,
+      };
+    case "jwt session creation and pre-expiry refresh":
+      return {
+        session_calls: evidence.session_calls,
+        first_expires_at: evidence.first_expires_at,
+        refreshed_expires_at: evidence.refreshed_expires_at,
+      };
+    case "401/403 recovery":
+      return {
+        statuses: evidence.statuses,
+        recovered: evidence.recovered,
+        response_keys: evidence.response_keys,
+      };
+    case "negative auth failure":
+      return {
+        observed_auth_failure: Boolean(evidence.observed_error),
+      };
+    case "finam_place_order":
+      return {
+        account: evidence.account_id ? "present" : null,
+        symbol: evidence.symbol ? "provided" : null,
+        order_id: evidence.order_id ? "present" : null,
+        cleanup_count: Array.isArray(evidence.cleanup) ? evidence.cleanup.length : 0,
+      };
+    case "finam_place_sltp":
+      return {
+        account: evidence.account_id ? "present" : null,
+        symbol: evidence.symbol ? "provided" : null,
+        sl_order_id: evidence.sl_order_id ? "present" : null,
+        tp_order_id: evidence.tp_order_id ? "present" : null,
+        cleanup_count: Array.isArray(evidence.cleanup) ? evidence.cleanup.length : 0,
+      };
+    case "optional gRPC JWT renewal with REST flow":
+      return {
+        rest_flow: evidence.rest_flow,
+        response_keys: evidence.response_keys,
+        warning_count: evidence.warning_count,
+      };
+    default:
+      return {};
+  }
 }
 
 function formatError(err) {
