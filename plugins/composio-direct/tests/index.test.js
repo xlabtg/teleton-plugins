@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const { tools: toolsFactory, manifest } = await import("../index.js");
@@ -95,6 +95,14 @@ describe("composio-direct Teleton integration", () => {
       readFileSync(resolve("plugins/composio-direct/package.json"), "utf8")
     );
     assert.equal(pkg.type, "module", 'package.json must have "type": "module"');
+  });
+
+  it("no package-lock.json so teleton skips npm ci and avoids spawn npm ENOENT on re-configure", () => {
+    assert.equal(
+      existsSync(resolve("plugins/composio-direct/package-lock.json")),
+      false,
+      "package-lock.json must not exist — composio-direct has no npm deps; its presence triggers npm ci which fails with spawn npm ENOENT when npm is not in PATH"
+    );
   });
 
   it("exports schema and connection tools with current manifest defaults", () => {
