@@ -80,7 +80,7 @@ export const manifest = {
   name: "ton-trading-bot",
   version: "2.2.0",
   sdkVersion: ">=1.0.0",
-  description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation. The LLM composes these into trading strategies.",
+  description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, and risk management.",
   defaultConfig: {
     maxTradePercent: 10,       // max single trade as % of balance
     minBalanceTON: 1,          // minimum TON balance required to trade

@@ -136,6 +136,13 @@ describe("ton-trading-bot plugin", () => {
       assert.ok("defaultSlippage" in mod.manifest.defaultConfig);
       assert.ok("simulationBalance" in mod.manifest.defaultConfig);
     });
+
+    it("manifest description is within 256-character limit", () => {
+      assert.ok(
+        mod.manifest.description.length <= 256,
+        `manifest description must be <=256 chars (got ${mod.manifest.description.length})`
+      );
+    });
   });
 
   // ── tools export ────────────────────────────────────────────────────────────

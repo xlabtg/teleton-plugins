@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const { tools: toolsFactory, manifest } = await import("../index.js");
 
@@ -88,6 +90,13 @@ function mockFetch(handler) {
 }
 
 describe("composio-direct Teleton integration", () => {
+  it("package.json declares type:module to suppress NODE_TYPELESS_PACKAGE_JSON warning", () => {
+    const pkg = JSON.parse(
+      readFileSync(resolve("plugins/composio-direct/package.json"), "utf8")
+    );
+    assert.equal(pkg.type, "module", 'package.json must have "type": "module"');
+  });
+
   it("exports schema and connection tools with current manifest defaults", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
