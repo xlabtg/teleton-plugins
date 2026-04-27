@@ -18,16 +18,18 @@ npm ci --ignore-scripts
 
 Log in to VK with the account that owns or manages the target communities.
 
-1. Create or open a VK developer app at `https://vk.com/dev/standalone` or `https://vk.com/apps?act=manage` and copy its **Application ID**. For a manual local flow, use `https://oauth.vk.com/blank.html` as the redirect URI.
-2. Create the user token for `vk_user_token`. In Teleton, run `vk_auth_user_url` with the copied `client_id`, open the returned URL, approve the requested scopes, and copy the `access_token` value from the redirected URL fragment.
+1. Create or open a VK developer standalone app at `https://vk.com/dev/standalone` or `https://vk.com/apps?act=manage` and copy its **Application ID**. For a manual local flow, use `https://oauth.vk.ru/blank.html` as the redirect URI.
+2. Create the user token for `vk_user_token`. In Teleton, run `vk_auth_user_url` with the copied `client_id`, open the returned URL, approve the requested scopes, and copy the `access_token` value from the redirected URL fragment. The helper uses comma-separated scope names because VK ID OAuth expects names, not a numeric bitmask.
 3. Create a community token for each managed community. In VK, open the community, go to **Manage** -> **Settings** -> **API usage** -> **Access tokens**, click **Create token**, allow the permissions needed by the plugin, confirm, and copy the generated token.
 4. If you prefer OAuth for community tokens, run `vk_auth_group_url` with the copied `client_id` and `group_ids`, open the returned URL, approve access, and copy each `access_token_<group_id>` value from the redirected URL fragment.
 
 Recommended user token scopes:
 
 ```text
-offline, wall, messages, friends, photos, groups, stats, notifications
+offline, wall, friends, photos, groups, stats, notifications
 ```
+
+The `messages` user scope is restricted by VK to eligible standalone applications that passed moderation or already had this access. Do not request it by default. If your app is eligible and you need `vk_user_messages_send`, pass `messages` explicitly in `vk_auth_user_url.scopes`.
 
 Recommended community token scopes:
 
@@ -40,8 +42,8 @@ The helper tools only build VK OAuth URLs. They do not store tokens.
 If the helper tools are not available yet during first install, use these OAuth URL templates directly:
 
 ```text
-https://oauth.vk.com/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=offline,wall,messages,friends,photos,groups,stats,notifications&response_type=token&v=5.199
-https://oauth.vk.com/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=manage,messages,photos,docs&response_type=token&v=5.199&group_ids=123456,789012
+https://oauth.vk.ru/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.ru/blank.html&scope=offline,wall,friends,photos,groups,stats,notifications&response_type=token&v=5.199
+https://oauth.vk.ru/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.ru/blank.html&scope=manage,messages,photos,docs&response_type=token&v=5.199&group_ids=123456,789012
 ```
 
 ### Link Tokens To Teleton
@@ -76,7 +78,7 @@ export VK_FULL_ADMIN_VK_USER_TOKEN="vk1.a...."
 export VK_FULL_ADMIN_VK_COMMUNITY_TOKENS='{"123456":"vk1.a.group-token"}'
 ```
 
-`vk_user_token` is required for personal account tools and for validating that the user has community manager rights. `vk_community_tokens` is a JSON object keyed by community ID without the minus sign. Community write tools require both a valid user token and a matching community token.
+`vk_user_token` is required for personal account tools and for validating that the user has community manager rights. `vk_user_messages_send` additionally requires a user token created with the restricted `messages` scope. `vk_community_tokens` is a JSON object keyed by community ID without the minus sign. Community write tools require both a valid user token and a matching community token.
 
 ### Verify Installation
 

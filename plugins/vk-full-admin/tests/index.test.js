@@ -86,6 +86,35 @@ describe("vk-full-admin", () => {
     assert.equal(names.length, 34);
   });
 
+  it("builds a default user OAuth URL without restricted message access", async () => {
+    const calls = [];
+    const tools = createVkFullAdminTools(makeSdk(), { VKClass: makeMockVK({ calls }) });
+    const result = await getTool(tools, "vk_auth_user_url").execute({ client_id: "12345" });
+
+    assert.equal(result.success, true);
+    assert.equal(result.data.scopes.includes("messages"), false);
+
+    const url = new URL(result.data.url);
+    assert.equal(url.origin, "https://oauth.vk.ru");
+    assert.equal(url.searchParams.get("client_id"), "12345");
+    assert.equal(url.searchParams.get("scope"), "offline,wall,friends,photos,groups,stats,notifications");
+  });
+
+  it("builds OAuth URLs with comma-separated scope names", async () => {
+    const calls = [];
+    const tools = createVkFullAdminTools(makeSdk(), { VKClass: makeMockVK({ calls }) });
+    const result = await getTool(tools, "vk_auth_group_url").execute({
+      client_id: "12345",
+      group_ids: [123, -456],
+    });
+
+    assert.equal(result.success, true);
+
+    const url = new URL(result.data.url);
+    assert.equal(url.searchParams.get("scope"), "manage,messages,photos,docs");
+    assert.equal(url.searchParams.get("group_ids"), "123,456");
+  });
+
   it("checks admin rights before posting to a community with the community token", async () => {
     const calls = [];
     const tools = createVkFullAdminTools(makeSdk(), { VKClass: makeMockVK({ calls }) });

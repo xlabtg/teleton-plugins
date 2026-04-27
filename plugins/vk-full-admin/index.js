@@ -14,6 +14,8 @@ const { groupScopes, userScopes } = require("@vk-io/authorization");
 
 const PLUGIN_ID = "vk-full-admin";
 const DEFAULT_API_VERSION = "5.199";
+const OAUTH_AUTHORIZE_URL = "https://oauth.vk.ru/authorize";
+const DEFAULT_REDIRECT_URI = "https://oauth.vk.ru/blank.html";
 const TOKEN_CACHE_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_RATE_LIMIT_PER_SECOND = 3;
@@ -21,7 +23,6 @@ const MAX_ERROR_LENGTH = 500;
 const DEFAULT_USER_SCOPES = [
   "offline",
   "wall",
-  "messages",
   "friends",
   "photos",
   "groups",
@@ -58,7 +59,7 @@ export const manifest = {
       required: true,
       env: "VK_FULL_ADMIN_VK_USER_TOKEN",
       description:
-        "VK user access token from OAuth implicit flow with wall, messages, friends, photos, groups, stats, notifications, and offline scopes",
+        "VK user access token from OAuth implicit flow with offline, wall, friends, photos, groups, stats, and notifications scopes. Add messages explicitly only for eligible standalone apps.",
     },
     vk_community_tokens: {
       required: false,
@@ -433,11 +434,12 @@ export function createVkFullAdminTools(sdk, options = {}) {
           redirect_uri: {
             type: "string",
             description: "OAuth redirect URI registered in VK app settings.",
-            default: "https://oauth.vk.com/blank.html",
+            default: DEFAULT_REDIRECT_URI,
           },
           scopes: {
             type: "array",
-            description: "VK user scope names. Defaults cover this plugin.",
+            description:
+              "VK user scope names. Defaults avoid the restricted messages scope; request messages explicitly only for eligible standalone apps.",
             items: { type: "string" },
           },
           revoke: {
@@ -454,7 +456,7 @@ export function createVkFullAdminTools(sdk, options = {}) {
           url: buildOAuthUrl({
             clientId: params.client_id,
             redirectUri: params.redirect_uri,
-            scope: scopeMask(scopes, userScopes),
+            scope: scopeNames(scopes, userScopes),
             revoke: params.revoke,
           }),
           scopes,
@@ -481,7 +483,7 @@ export function createVkFullAdminTools(sdk, options = {}) {
           redirect_uri: {
             type: "string",
             description: "OAuth redirect URI registered in VK app settings.",
-            default: "https://oauth.vk.com/blank.html",
+            default: DEFAULT_REDIRECT_URI,
           },
           scopes: {
             type: "array",
@@ -498,7 +500,7 @@ export function createVkFullAdminTools(sdk, options = {}) {
           url: buildOAuthUrl({
             clientId: params.client_id,
             redirectUri: params.redirect_uri,
-            scope: scopeMask(scopes, groupScopes),
+            scope: scopeNames(scopes, groupScopes),
             groupIds: params.group_ids,
             revoke: params.revoke,
           }),
@@ -615,7 +617,7 @@ export function createVkFullAdminTools(sdk, options = {}) {
     return {
       name: "vk_user_messages_send",
       description:
-        "Send a VK direct message from the user account to user_id or peer_id. Uses random_id for idempotency.",
+        "Send a VK direct message from the user account to user_id or peer_id. Requires a user token with the restricted messages scope. Uses random_id for idempotency.",
       scope: "dm-only",
       category: "action",
       parameters: {
@@ -1685,21 +1687,22 @@ function randomId() {
   return randomInt(1, 2_147_483_647);
 }
 
-function scopeMask(scopes, scopeMap) {
-  let mask = 0;
+function scopeNames(scopes, scopeMap) {
+  const names = [];
   for (const scope of normalizeList(scopes)) {
-    const value = scopeMap.get(String(scope));
+    const name = String(scope).trim();
+    const value = scopeMap.get(name);
     if (!value) throw new Error(`Unknown VK scope: ${scope}`);
-    mask |= value;
+    names.push(name);
   }
-  return String(mask);
+  return names.join(",");
 }
 
 function buildOAuthUrl({ clientId, redirectUri, scope, groupIds, revoke = false }) {
-  const url = new URL("https://oauth.vk.com/authorize");
+  const url = new URL(OAUTH_AUTHORIZE_URL);
   url.searchParams.set("client_id", String(clientId));
   url.searchParams.set("display", "page");
-  url.searchParams.set("redirect_uri", redirectUri ?? "https://oauth.vk.com/blank.html");
+  url.searchParams.set("redirect_uri", redirectUri ?? DEFAULT_REDIRECT_URI);
   url.searchParams.set("scope", String(scope));
   url.searchParams.set("response_type", "token");
   url.searchParams.set("v", DEFAULT_API_VERSION);

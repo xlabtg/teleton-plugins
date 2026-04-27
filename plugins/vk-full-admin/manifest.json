@@ -14,7 +14,7 @@
   "secrets": {
     "vk_user_token": {
       "required": true,
-      "description": "VK user access token created through VK OAuth implicit flow; use the plugin vk_auth_user_url helper or https://oauth.vk.com/blank.html redirect with offline, wall, messages, friends, photos, groups, stats, and notifications scopes"
+      "description": "VK user access token created through VK OAuth implicit flow; use the plugin vk_auth_user_url helper or https://oauth.vk.ru/blank.html redirect with offline, wall, friends, photos, groups, stats, and notifications scopes. Request messages explicitly only for eligible standalone apps."
     },
     "vk_community_tokens": {
       "required": false,
