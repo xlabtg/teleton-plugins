@@ -1,0 +1,64 @@
+{
+  "id": "vk-full-admin",
+  "name": "VK Full Admin",
+  "version": "1.0.0",
+  "description": "VK personal account and community administration with publishing, moderation, members, settings, analytics, and group dialogs",
+  "author": {
+    "name": "xlabtg",
+    "url": "https://github.com/xlabtg"
+  },
+  "license": "MIT",
+  "entry": "index.js",
+  "teleton": ">=1.0.0",
+  "sdkVersion": ">=1.0.0",
+  "secrets": {
+    "vk_user_token": {
+      "required": true,
+      "description": "VK user access token created through VK OAuth implicit flow; use the plugin vk_auth_user_url helper or https://oauth.vk.com/blank.html redirect with offline, wall, messages, friends, photos, groups, stats, and notifications scopes"
+    },
+    "vk_community_tokens": {
+      "required": false,
+      "description": "JSON object mapping community IDs without minus signs to community tokens created in VK community Manage -> Settings -> API usage -> Access tokens, for example {\"123456\":\"token\"}"
+    }
+  },
+  "tools": [
+    { "name": "vk_auth_status", "description": "Check VK token configuration and optionally validate the user token" },
+    { "name": "vk_auth_user_url", "description": "Build a VK OAuth implicit-flow URL for a user token" },
+    { "name": "vk_auth_group_url", "description": "Build a VK OAuth URL for community tokens" },
+    { "name": "vk_group_admin_check", "description": "Validate admin rights in a VK community" },
+    { "name": "vk_user_info", "description": "Get VK user profile information" },
+    { "name": "vk_user_messages_send", "description": "Send a VK direct message from the user account" },
+    { "name": "vk_user_wall_post", "description": "Publish a VK user wall post" },
+    { "name": "vk_user_friends_list", "description": "List VK friends" },
+    { "name": "vk_group_wall_post", "description": "Publish a post on a VK community wall" },
+    { "name": "vk_group_wall_edit", "description": "Edit a VK community wall post" },
+    { "name": "vk_group_wall_delete", "description": "Delete a VK community wall post" },
+    { "name": "vk_group_pin_post", "description": "Pin or unpin a VK community wall post" },
+    { "name": "vk_group_upload_photo", "description": "Upload a photo to a VK community" },
+    { "name": "vk_group_create_poll", "description": "Create a VK community poll" },
+    { "name": "vk_group_comment_delete", "description": "Delete a VK community wall comment" },
+    { "name": "vk_group_comment_hide_spam", "description": "Report a VK community wall comment" },
+    { "name": "vk_group_ban_user", "description": "Ban a VK user from a community" },
+    { "name": "vk_group_unban_user", "description": "Unban a VK user from a community" },
+    { "name": "vk_group_blacklist_list", "description": "List VK community blacklist entries" },
+    { "name": "vk_group_clean_wall", "description": "Dry-run or delete matching VK community wall posts" },
+    { "name": "vk_group_members_list", "description": "List VK community members" },
+    { "name": "vk_group_invite", "description": "Invite a user to a VK community" },
+    { "name": "vk_group_remove", "description": "Remove a user from a VK community" },
+    { "name": "vk_group_set_role", "description": "Set a VK community manager role" },
+    { "name": "vk_group_info", "description": "Get VK community information" },
+    { "name": "vk_group_update_settings", "description": "Update VK community settings" },
+    { "name": "vk_group_update_cover", "description": "Update a VK community cover image" },
+    { "name": "vk_group_update_avatar", "description": "Update a VK community avatar" },
+    { "name": "vk_group_stats", "description": "Get VK community statistics" },
+    { "name": "vk_group_post_reach", "description": "Get VK community post reach" },
+    { "name": "vk_group_audience", "description": "Get VK community audience demographics" },
+    { "name": "vk_group_msg_send", "description": "Send a VK message from a community" },
+    { "name": "vk_group_msg_history", "description": "Read VK community dialog history" },
+    { "name": "vk_group_msg_set_typing", "description": "Set VK community dialog activity" }
+  ],
+  "permissions": [],
+  "tags": ["vk", "social", "admin", "community", "moderation", "analytics", "messages"],
+  "repository": "https://github.com/TONresistor/teleton-plugins",
+  "funding": null
+}

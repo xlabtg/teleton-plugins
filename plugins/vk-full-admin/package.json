@@ -1,0 +1,11 @@
+{
+  "name": "teleton-plugin-vk-full-admin",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "Teleton plugin for VK user and community administration",
+  "dependencies": {
+    "@vk-io/authorization": "^1.4.0",
+    "vk-io": "^4.8.0"
+  }
+}

@@ -3,8 +3,8 @@
 # teleton-plugins
 
 [![GitHub stars](https://img.shields.io/github/stars/TONresistor/teleton-plugins?style=flat&logo=github)](https://github.com/TONresistor/teleton-plugins/stargazers)
-[![Plugins](https://img.shields.io/badge/plugins-33-8B5CF6.svg)](#available-plugins)
-[![Tools](https://img.shields.io/badge/tools-366-E040FB.svg)](#available-plugins)
+[![Plugins](https://img.shields.io/badge/plugins-34-8B5CF6.svg)](#available-plugins)
+[![Tools](https://img.shields.io/badge/tools-400-E040FB.svg)](#available-plugins)
 [![SDK](https://img.shields.io/badge/SDK-v1.0.0-00C896.svg)](#plugin-sdk)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -76,7 +76,7 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 
 ## Available Plugins
 
-> **33 plugins** · **366 tools** · [Browse the registry](registry.json)
+> **34 plugins** · **400 tools** · [Browse the registry](registry.json)
 
 ### DeFi & Trading
 
@@ -107,6 +107,7 @@ No build step. Just copy and go. Plugins with npm dependencies are auto-installe
 | Plugin | Description | Tools | Author |
 |--------|-------------|:-----:|--------|
 | [twitter](plugins/twitter/) | X/Twitter API v2 — search, post, like, retweet, follow | 24 | teleton |
+| [vk-full-admin](plugins/vk-full-admin/) | VK personal account and community administration — publishing, moderation, members, settings, analytics, group dialogs | 34 | xlabtg |
 | [pic](plugins/pic/) | Image search via @pic inline bot | 1 | teleton |
 | [vid](plugins/vid/) | YouTube search via @vid inline bot | 1 | teleton |
 | [deezer](plugins/deezer/) | Music search via @DeezerMusicBot | 1 | teleton |

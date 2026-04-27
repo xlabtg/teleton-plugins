@@ -178,6 +178,14 @@
       "path": "plugins/twitter"
     },
     {
+      "id": "vk-full-admin",
+      "name": "VK Full Admin",
+      "description": "VK personal account and community administration with publishing, moderation, members, settings, analytics, and group dialogs",
+      "author": "xlabtg",
+      "tags": ["vk", "social", "admin", "community", "moderation", "analytics", "messages"],
+      "path": "plugins/vk-full-admin"
+    },
+    {
       "id": "casino",
       "name": "Teleton Casino",
       "description": "Slot machine and dice games with TON payments and auto-payout",
