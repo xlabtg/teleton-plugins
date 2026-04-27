@@ -57,12 +57,14 @@ export const manifest = {
     vk_user_token: {
       required: true,
       env: "VK_FULL_ADMIN_VK_USER_TOKEN",
-      description: "VK user access token with wall, messages, friends, photos, groups, stats, notifications, and offline scopes",
+      description:
+        "VK user access token from OAuth implicit flow with wall, messages, friends, photos, groups, stats, notifications, and offline scopes",
     },
     vk_community_tokens: {
       required: false,
       env: "VK_FULL_ADMIN_VK_COMMUNITY_TOKENS",
-      description: "JSON object mapping community IDs to group tokens, for example {\"123456\":\"token\"}",
+      description:
+        "JSON object mapping community IDs without minus signs to community tokens from VK community API access-token settings",
     },
   },
 };

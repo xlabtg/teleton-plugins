@@ -14,16 +14,14 @@ cd ~/.teleton/plugins/vk-full-admin
 npm ci --ignore-scripts
 ```
 
-Configure secrets in the Teleton WebUI or CLI:
+### Create VK Access Tokens
 
-```bash
-/secret set vk_full_admin vk_user_token "vk1.a...."
-/secret set vk_full_admin vk_community_tokens '{"123456":"vk1.a.group-token","789012":"vk1.a.other-token"}'
-```
+Log in to VK with the account that owns or manages the target communities.
 
-`vk_user_token` is required for personal account tools and for validating that the user has community manager rights. `vk_community_tokens` is a JSON object keyed by community ID without the minus sign. Community write tools require both a valid user token and a matching community token.
-
-## Token Scopes
+1. Create or open a VK developer app at `https://vk.com/dev/standalone` or `https://vk.com/apps?act=manage` and copy its **Application ID**. For a manual local flow, use `https://oauth.vk.com/blank.html` as the redirect URI.
+2. Create the user token for `vk_user_token`. In Teleton, run `vk_auth_user_url` with the copied `client_id`, open the returned URL, approve the requested scopes, and copy the `access_token` value from the redirected URL fragment.
+3. Create a community token for each managed community. In VK, open the community, go to **Manage** -> **Settings** -> **API usage** -> **Access tokens**, click **Create token**, allow the permissions needed by the plugin, confirm, and copy the generated token.
+4. If you prefer OAuth for community tokens, run `vk_auth_group_url` with the copied `client_id` and `group_ids`, open the returned URL, approve access, and copy each `access_token_<group_id>` value from the redirected URL fragment.
 
 Recommended user token scopes:
 
@@ -37,7 +35,52 @@ Recommended community token scopes:
 manage, messages, photos, docs
 ```
 
-The helper tools `vk_auth_user_url` and `vk_auth_group_url` build OAuth URLs for these scopes. They do not store tokens.
+The helper tools only build VK OAuth URLs. They do not store tokens.
+
+If the helper tools are not available yet during first install, use these OAuth URL templates directly:
+
+```text
+https://oauth.vk.com/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=offline,wall,messages,friends,photos,groups,stats,notifications&response_type=token&v=5.199
+https://oauth.vk.com/authorize?client_id=<APP_ID>&display=page&redirect_uri=https://oauth.vk.com/blank.html&scope=manage,messages,photos,docs&response_type=token&v=5.199&group_ids=123456,789012
+```
+
+### Link Tokens To Teleton
+
+Configure secrets in **Teleton WebUI** -> **Plugins** -> **VK Full Admin** -> **Keys**:
+
+| Secret | Required | Value |
+| --- | --- | --- |
+| `vk_user_token` | Yes | User `access_token` copied from the OAuth redirect URL |
+| `vk_community_tokens` | For community write tools | JSON object keyed by community ID without the minus sign |
+
+Example `vk_community_tokens` value:
+
+```json
+{
+  "123456": "vk1.a.group-token",
+  "789012": "vk1.a.other-token"
+}
+```
+
+The same secrets can be set through the Teleton chat CLI:
+
+```bash
+/secret set vk_full_admin vk_user_token "vk1.a...."
+/secret set vk_full_admin vk_community_tokens '{"123456":"vk1.a.group-token","789012":"vk1.a.other-token"}'
+```
+
+Container and CI deployments can set the matching environment variables:
+
+```bash
+export VK_FULL_ADMIN_VK_USER_TOKEN="vk1.a...."
+export VK_FULL_ADMIN_VK_COMMUNITY_TOKENS='{"123456":"vk1.a.group-token"}'
+```
+
+`vk_user_token` is required for personal account tools and for validating that the user has community manager rights. `vk_community_tokens` is a JSON object keyed by community ID without the minus sign. Community write tools require both a valid user token and a matching community token.
+
+### Verify Installation
+
+Ask the agent to run `vk_auth_status` with `validate: true`, then run `vk_group_admin_check` for each configured community ID. If validation fails with VK error `5`, recreate and relink the expired or revoked token.
 
 ## Tools
 

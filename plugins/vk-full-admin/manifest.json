@@ -14,11 +14,11 @@
   "secrets": {
     "vk_user_token": {
       "required": true,
-      "description": "VK user access token with offline, wall, messages, friends, photos, groups, stats, and notifications scopes"
+      "description": "VK user access token created through VK OAuth implicit flow; use the plugin vk_auth_user_url helper or https://oauth.vk.com/blank.html redirect with offline, wall, messages, friends, photos, groups, stats, and notifications scopes"
     },
     "vk_community_tokens": {
       "required": false,
-      "description": "JSON object mapping community IDs to group tokens, for example {\"123456\":\"token\"}"
+      "description": "JSON object mapping community IDs without minus signs to community tokens created in VK community Manage -> Settings -> API usage -> Access tokens, for example {\"123456\":\"token\"}"
     }
   },
   "tools": [
