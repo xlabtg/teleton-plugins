@@ -2381,6 +2381,27 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.equal(result.data.mode, "real");
     });
+
+    it("clamps the fixed-fraction size to the balance — an unleveraged position cannot exceed the wallet (issue #182)", async () => {
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => [], run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_optimal_position_size");
+      // balance = 100.5 (mock). risk 2% / stop 1% → raw fixed-fraction = 100.5 * 2 = 201,
+      // more than the whole wallet. Spot TON trading is unleveraged, so it must be capped.
+      const result = await tool.execute({ mode: "real", stop_loss_percent: 1, risk_percent: 2 }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.balance, 100.5);
+      assert.ok(
+        result.data.fixed_fraction_position_size <= result.data.balance,
+        `fixed-fraction ${result.data.fixed_fraction_position_size} must not exceed balance ${result.data.balance}`
+      );
+      assert.equal(result.data.fixed_fraction_position_size, 100.5);
+      assert.equal(result.data.fixed_fraction_capped_by_balance, true);
+    });
   });
 
   // ── ton_trading_schedule_trade ──────────────────────────────────────────────
@@ -3560,6 +3581,31 @@ describe("ton-trading-bot plugin", () => {
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_order_book_depth");
       assert.ok(tool.parameters?.required?.includes("from_asset"));
       assert.ok(tool.parameters?.required?.includes("to_asset"));
+    });
+
+    it("reports a one-directional price spread, not a fake bid/ask spread (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_order_book_depth");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // The tool only quotes one direction (from_asset → to_asset) at growing fill
+      // sizes, so it cannot form a real bid/ask spread (that needs opposing buy and
+      // sell quotes). It must expose the honest field name and NOT the misleading one.
+      assert.ok(
+        "price_spread_across_sizes" in result.data,
+        "expected the honest price_spread_across_sizes field"
+      );
+      assert.ok(
+        !("bid_ask_spread" in result.data),
+        "must not expose a fake bid_ask_spread field for one-directional quotes"
+      );
+      // With the fixed mock quote (output 10.5 at every size), effective price walks
+      // 10.5/amt, so the spread between the smallest and largest probe is non-null.
+      assert.equal(typeof result.data.price_spread_across_sizes, "number");
+      assert.ok(result.data.price_spread_across_sizes > 0);
     });
   });
 

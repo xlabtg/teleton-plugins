@@ -1,7 +1,7 @@
 {
   "id": "ton-trading-bot",
   "name": "TON Trading Bot",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation.",
   "author": {
     "name": "xlabtg",
@@ -146,7 +146,7 @@
     },
     {
       "name": "ton_trading_get_order_book_depth",
-      "description": "Analyse order book depth, liquidity, and price impact for a token pair"
+      "description": "Analyse synthetic depth, liquidity, and price impact for a token pair from one-directional DEX quotes at increasing fill sizes (not a true bid/ask spread)"
     },
     {
       "name": "ton_trading_create_schedule",

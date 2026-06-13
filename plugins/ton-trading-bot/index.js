@@ -2689,8 +2689,15 @@ export const tools = (sdk) => [
         const kellyFraction = winRate - (1 - winRate) / b;
         const halfKellyFraction = Math.max(0, kellyFraction / 2); // half-Kelly for safety
 
-        // Fixed-fraction: risk a fixed % of capital, sized so stop-loss = that % of capital
-        const fixedFractionSize = balance * (risk_percent / 100) / (stop_loss_percent / 100);
+        // Fixed-fraction: risk a fixed % of capital, sized so the stop-loss loss
+        // equals that % of capital. The raw formula can exceed the balance when the
+        // stop is tighter than the risk budget (e.g. risk 2% / stop 1% → 200% of
+        // balance). Spot TON trading is unleveraged, so a position can never exceed
+        // the wallet — clamp to the available balance so the figure is actionable
+        // and never recommends deploying more capital than exists (issue #182).
+        const rawFixedFractionSize = balance * (risk_percent / 100) / (stop_loss_percent / 100);
+        const fixedFractionSize = Math.min(balance, rawFixedFractionSize);
+        const fixedFractionCapped = rawFixedFractionSize > balance;
 
         return {
           success: true,
@@ -2705,6 +2712,9 @@ export const tools = (sdk) => [
             half_kelly_fraction: parseFloat(halfKellyFraction.toFixed(4)),
             kelly_position_size: parseFloat((balance * halfKellyFraction).toFixed(4)),
             fixed_fraction_position_size: parseFloat(fixedFractionSize.toFixed(4)),
+            // True when the raw fixed-fraction size was larger than the balance and
+            // got clamped — signals the stop is tight relative to the risk budget.
+            fixed_fraction_capped_by_balance: fixedFractionCapped,
             risk_percent,
             stop_loss_percent,
             recommendation: kellyFraction <= 0
@@ -3869,7 +3879,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_order_book_depth",
     description:
-      "Analyse order book depth and liquidity for a token pair. Returns bid/ask spread, depth at various price levels, and estimated price impact for a given trade size. Use before large trades to assess slippage risk.",
+      "Analyse synthetic order-book depth and liquidity for a token pair by probing DEX quotes at increasing fill sizes. Returns depth at various sizes, the price spread across fill sizes, and estimated price impact for a given trade size. Use before large trades to assess slippage risk. Quotes are one-directional, so this measures depth/price-impact, not a true bid/ask spread.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -3913,15 +3923,19 @@ export const tools = (sdk) => [
           return { amount_in: amt, amount_out: output, effective_price: effectivePrice };
         }).filter(Boolean);
 
-        // Calculate spread and price impact
-        let bidAskSpread = null;
+        // Effective price moves as fill size grows because larger fills walk the
+        // pool's curve. We only quote ONE direction (from_asset → to_asset), so this
+        // is NOT a real bid/ask spread (that needs opposing buy and sell quotes at
+        // the same size). Report it honestly as the price spread across fill sizes —
+        // the gap between the smallest and largest probe (issue #182).
+        let priceSpreadAcrossSizes = null;
         let priceImpactPercent = null;
 
         if (depthLevels.length >= 2) {
           const basePrice = depthLevels[0]?.effective_price;
           const largePrice = depthLevels[depthLevels.length - 1]?.effective_price;
           if (basePrice && largePrice) {
-            bidAskSpread = parseFloat(Math.abs(basePrice - largePrice).toFixed(6));
+            priceSpreadAcrossSizes = parseFloat(Math.abs(basePrice - largePrice).toFixed(6));
             priceImpactPercent = parseFloat(((Math.abs(basePrice - largePrice) / basePrice) * 100).toFixed(4));
           }
         }
@@ -3953,7 +3967,7 @@ export const tools = (sdk) => [
           from_asset,
           to_asset,
           depth_levels: depthLevels,
-          bid_ask_spread: bidAskSpread,
+          price_spread_across_sizes: priceSpreadAcrossSizes,
           price_impact_percent_large: priceImpactPercent,
           custom_trade_impact: customTradeImpact,
           liquidity_rating: priceImpactPercent == null ? null :
