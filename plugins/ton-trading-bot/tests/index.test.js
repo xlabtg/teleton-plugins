@@ -1704,6 +1704,38 @@ describe("ton-trading-bot plugin", () => {
       assert.ok("win_rate" in result.data);
       assert.ok("total_pnl_percent" in result.data);
     });
+
+    it("sharpe_ratio uses the sample stddev (n-1 divisor)", async () => {
+      // buy_and_hold buys on every trade. With huge exit/stop thresholds the
+      // effective return equals the raw pnl, so capital 1000 →1100 →1320 and the
+      // per-trade returns are [0.10, 0.20]. Sample stddev (n-1) → sharpe ≈ 2.1213;
+      // population stddev (n) would give 3.0.
+      const trades = [
+        { id: 1, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 0, status: "closed" },
+        { id: 2, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 10, status: "closed" },
+        { id: 3, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 20, status: "closed" },
+      ];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_backtest");
+      const result = await tool.execute(
+        {
+          strategy: "buy_and_hold", from_asset: "TON", to_asset: "EQCxE6test",
+          exit_threshold_percent: 1000, stop_loss_percent: 1000,
+        },
+        {}
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.simulated_trades, 2);
+      assert.ok(
+        Math.abs(result.data.sharpe_ratio - 2.1213) < 0.01,
+        `expected sample-stddev sharpe ≈ 2.1213, got ${result.data.sharpe_ratio}`
+      );
+    });
   });
 
   // ── ton_trading_calculate_risk_metrics ──────────────────────────────────────
@@ -1742,6 +1774,133 @@ describe("ton-trading-bot plugin", () => {
       assert.ok("max_drawdown_percent" in result.data);
       assert.ok("value_at_risk_percent" in result.data);
       assert.ok("sharpe_ratio" in result.data);
+    });
+
+    it("value_at_risk_percent is 0 when every trade is a winner (no phantom VaR — issue #182)", async () => {
+      // VaR is a loss magnitude. A history with no losing trades has zero
+      // downside at the percentile. The old code used Math.abs(var95), turning
+      // a winning percentile return into a positive "risk" out of thin air.
+      const trades = [
+        { pnl_percent: 5 }, { pnl_percent: 10 }, { pnl_percent: 8 },
+        { pnl_percent: 12 }, { pnl_percent: 3 },
+      ];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.equal(
+        result.data.value_at_risk_percent, 0,
+        "all-winning history must not report a positive value at risk"
+      );
+    });
+
+    it("sharpe_ratio uses the sample standard deviation (n-1 divisor)", async () => {
+      // returns = [0.10, 0.20], mean = 0.15.
+      // Sample variance (n-1): ((-0.05)^2 + 0.05^2) / 1 = 0.005 → stddev ≈ 0.070711
+      //   → sharpe = 0.15 / 0.070711 ≈ 2.1213.
+      // Population variance (n) would give stddev 0.05 → sharpe 3.0, so this
+      // value distinguishes the two divisors unambiguously.
+      const trades = [{ pnl_percent: 10 }, { pnl_percent: 20 }];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.ok(
+        Math.abs(result.data.sharpe_ratio - 2.1213) < 0.01,
+        `expected sample-stddev sharpe ≈ 2.1213, got ${result.data.sharpe_ratio}`
+      );
+    });
+
+    it("sharpe_ratio is null for a single scored trade (no n-1 division by zero)", async () => {
+      const trades = [{ pnl_percent: 10 }];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.sharpe_ratio, null);
+    });
+  });
+
+  // ── ton_trading_get_technical_indicators ────────────────────────────────────
+  describe("ton_trading_get_technical_indicators", () => {
+    // GeckoTerminal's ohlcv_list is newest-first (descending timestamp). Build an
+    // ascending chronological ramp, then hand it to the mock in the API's order.
+    function rampCandlesNewestFirst() {
+      const base = 1_781_370_000;
+      const chronological = [];
+      for (let i = 0; i < 50; i++) {
+        const close = 100 + i; // upward trend: oldest 100 … newest 149
+        chronological.push([base + i * 3600, close, close + 0.5, close - 0.5, close, 1000]);
+      }
+      return chronological.slice().reverse(); // newest-first, as the API returns it
+    }
+
+    function mockFetchOk(ohlcvList) {
+      return async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { attributes: { ohlcv_list: ohlcvList } } }),
+      });
+    }
+
+    it("sorts OHLCV ascending so current_price is the newest candle (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_technical_indicators");
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = mockFetchOk(rampCandlesNewestFirst());
+      try {
+        const result = await tool.execute({ token_address: "EQCtest" }, {});
+        assert.equal(result.success, true);
+        // Newest candle close is 149. Without the ascending sort the code read the
+        // first array element (the newest, but treated as oldest) and reported the
+        // oldest close (100) as current_price.
+        assert.equal(result.data.current_price, 149);
+        // An upward chronological trend must yield a positive MACD line; a
+        // time-reversed series would make it negative.
+        assert.ok(result.data.macd.macd_line > 0, `expected positive MACD line, got ${result.data.macd.macd_line}`);
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
+
+    it("MACD signal line is the EMA of the MACD line, not of raw prices (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_technical_indicators");
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = mockFetchOk(rampCandlesNewestFirst());
+      try {
+        const result = await tool.execute({ token_address: "EQCtest" }, {});
+        assert.equal(result.success, true);
+        // The MACD line for prices near 100-149 is a small single-digit number.
+        // The signal line is its 9-EMA, so it lives on the same small scale and
+        // the histogram (macd − signal) is tiny. The old code took the 9-EMA of
+        // the raw prices (~145), making the histogram ≈ -140.
+        assert.ok(
+          Math.abs(result.data.macd.histogram) < 5,
+          `signal line should track the MACD line: histogram ${result.data.macd.histogram} is too large`
+        );
+        assert.ok(
+          result.data.macd.signal_line < 50,
+          `signal line ${result.data.macd.signal_line} looks like an EMA of prices, not of the MACD line`
+        );
+      } finally {
+        globalThis.fetch = origFetch;
+      }
     });
   });
 

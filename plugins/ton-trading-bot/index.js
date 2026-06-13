@@ -2164,11 +2164,11 @@ export const tools = (sdk) => [
         const winRate = totalTrades > 0 ? wins / totalTrades : 0;
         const maxDrawdown = maxCapital > 0 ? ((maxCapital - minCapital) / maxCapital) * 100 : 0;
 
-        // Sharpe ratio (simplified, assuming risk-free rate = 0)
+        // Per-trade Sharpe ratio (risk-free rate = 0), sample stddev (n-1 divisor).
         let sharpe = null;
         if (returns.length > 1) {
           const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
           const stddev = Math.sqrt(variance);
           sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
         }
@@ -2278,9 +2278,15 @@ export const tools = (sdk) => [
         const var95 = sorted[varIndex] ?? sorted[0];
 
         const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-        const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
-        const stddev = Math.sqrt(variance);
-        const sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
+        // Sample standard deviation (n-1 divisor) — the conventional basis for a
+        // Sharpe ratio over a sample of trade returns. This is a per-trade Sharpe
+        // (not annualised, since trade frequency is not tracked). Needs >= 2 trades.
+        let sharpe = null;
+        if (returns.length >= 2) {
+          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+          const stddev = Math.sqrt(variance);
+          sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
+        }
 
         // Max drawdown
         let peak = 1;
@@ -2323,7 +2329,10 @@ export const tools = (sdk) => [
             profit_factor: profitFactor,
             sharpe_ratio: sharpe,
             max_drawdown_percent: parseFloat((maxDrawdown * 100).toFixed(2)),
-            value_at_risk_percent: parseFloat((Math.abs(var95) * 100).toFixed(2)),
+            // VaR is a loss magnitude: report 0 when the percentile return is a
+            // gain (no historical loss at this confidence) instead of a phantom
+            // positive produced by Math.abs() on a winning sample (issue #182).
+            value_at_risk_percent: parseFloat((Math.max(0, -var95) * 100).toFixed(2)),
             confidence_level,
           },
         };
@@ -2594,7 +2603,7 @@ export const tools = (sdk) => [
             : 5;
         }
 
-        // Kelly Criterion: f* = W/L - (1-W)/W  where W=win_rate, L=loss_rate, b=avg_win/avg_loss
+        // Kelly Criterion: f* = W - (1-W)/b  where W=win_rate (fraction), b=avg_win/avg_loss (payoff ratio)
         const b = avgLossPct > 0 ? avgWinPct / avgLossPct : 1;
         const kellyFraction = winRate - (1 - winRate) / b;
         const halfKellyFraction = Math.max(0, kellyFraction / 2); // half-Kelly for safety
@@ -3622,14 +3631,19 @@ export const tools = (sdk) => [
         }
 
         const json = await res.json();
-        const ohlcv = (json?.data?.attributes?.ohlcv_list ?? []).map(([ts, o, h, l, c, v]) => ({
-          timestamp: ts * 1000,
-          open: parseFloat(o),
-          high: parseFloat(h),
-          low: parseFloat(l),
-          close: parseFloat(c),
-          volume: parseFloat(v),
-        }));
+        // GeckoTerminal returns ohlcv_list newest-first (descending timestamp).
+        // Sort ascending so closes[last] is the most recent candle — otherwise
+        // RSI/MACD gains/losses are time-reversed and current_price is stale.
+        const ohlcv = (json?.data?.attributes?.ohlcv_list ?? [])
+          .map(([ts, o, h, l, c, v]) => ({
+            timestamp: ts * 1000,
+            open: parseFloat(o),
+            high: parseFloat(h),
+            low: parseFloat(l),
+            close: parseFloat(c),
+            volume: parseFloat(v),
+          }))
+          .sort((a, b) => a.timestamp - b.timestamp);
 
         if (ohlcv.length < periods) {
           return { success: false, error: `Not enough price data: need ${periods} candles, got ${ohlcv.length}` };
@@ -3652,18 +3666,23 @@ export const tools = (sdk) => [
         const rsi = parseFloat((100 - 100 / (1 + rs)).toFixed(2));
 
         // ── MACD (Moving Average Convergence Divergence) ───────────────────
-        function ema(data, n) {
+        // EMA as a running series so the signal line can be the 9-period EMA of
+        // the MACD line itself (its definition) rather than of raw prices.
+        function emaSeries(data, n) {
           const k = 2 / (n + 1);
-          let emaVal = data[0];
+          const out = [data[0]];
           for (let i = 1; i < data.length; i++) {
-            emaVal = data[i] * k + emaVal * (1 - k);
+            out.push(data[i] * k + out[i - 1] * (1 - k));
           }
-          return emaVal;
+          return out;
         }
-        const ema12 = ema(closes, 12);
-        const ema26 = ema(closes, 26);
-        const macdLine = parseFloat((ema12 - ema26).toFixed(6));
-        const signalLine = parseFloat(ema(closes.slice(-9), 9).toFixed(6));
+        const ema12Series = emaSeries(closes, 12);
+        const ema26Series = emaSeries(closes, 26);
+        const macdSeries = closes.map((_, i) => ema12Series[i] - ema26Series[i]);
+        const macdLine = parseFloat(macdSeries[macdSeries.length - 1].toFixed(6));
+        // Signal line = 9-period EMA of the MACD line series (not of prices).
+        const signalSeriesVals = emaSeries(macdSeries, 9);
+        const signalLine = parseFloat(signalSeriesVals[signalSeriesVals.length - 1].toFixed(6));
         const macdHistogram = parseFloat((macdLine - signalLine).toFixed(6));
 
         // ── Bollinger Bands ────────────────────────────────────────────────
