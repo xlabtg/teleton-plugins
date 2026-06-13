@@ -1688,7 +1688,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_top_traders",
     description:
-      "Find top-performing trader wallets on TON by analysing on-chain DEX activity. Returns wallets ranked by win rate and profit over the specified period. Use to find wallets worth copying.",
+      "Find the most active, highest-volume trader wallets on TON by analysing recent on-chain DEX activity on trending pools. Returns wallets ranked by USD volume and trade count. NOTE: this surfaces activity and volume, not realized profitability — a single trades snapshot cannot establish win rate or PnL, so no win rate is reported.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -1701,23 +1701,16 @@ export const tools = (sdk) => [
         },
         min_trades: {
           type: "integer",
-          description: "Minimum number of trades to qualify (default 10)",
+          description: "Minimum number of observed trades to qualify (default 10)",
           minimum: 1,
-        },
-        min_win_rate: {
-          type: "number",
-          description: "Minimum win rate (0–1, e.g. 0.6 = 60%, default 0.55)",
-          minimum: 0,
-          maximum: 1,
         },
       },
     },
     execute: async (params, _context) => {
       const limit = params.limit ?? 10;
       const minTrades = params.min_trades ?? 10;
-      const minWinRate = params.min_win_rate ?? 0.55;
       try {
-        const cacheKey = `toptraders:${limit}:${minTrades}:${minWinRate}`;
+        const cacheKey = `toptraders:${limit}:${minTrades}`;
         const cached = sdk.storage.get(cacheKey);
         if (cached) return { success: true, data: cached };
 
@@ -1756,32 +1749,36 @@ export const tools = (sdk) => [
               const wallet = attr.tx_from_address ?? null;
               if (!wallet) continue;
 
-              const priceChange = parseFloat(attr.price_to_in_currency_token ?? 0) -
-                parseFloat(attr.price_from_in_currency_token ?? 0);
-              const isWin = priceChange > 0;
-
+              // A single trade cannot tell us whether the wallet *profited* — that
+              // needs a matched entry/exit valued in one unit. The old code subtracted
+              // the price of the "to" token from the price of the "from" token (two
+              // different assets, two different units) and called a positive result a
+              // "win"; that figure is meaningless (issue #182). We only aggregate
+              // genuinely same-unit signals: trade count, USD volume, and buy/sell mix.
               if (!walletStats.has(wallet)) {
-                walletStats.set(wallet, { wallet, trades: 0, wins: 0, total_volume_usd: 0 });
+                walletStats.set(wallet, { wallet, trades: 0, buys: 0, sells: 0, total_volume_usd: 0 });
               }
               const stats = walletStats.get(wallet);
               stats.trades += 1;
-              if (isWin) stats.wins += 1;
-              stats.total_volume_usd += parseFloat(attr.volume_in_usd ?? 0);
+              if (attr.kind === "buy") stats.buys += 1;
+              else if (attr.kind === "sell") stats.sells += 1;
+              stats.total_volume_usd += parseFloat(attr.volume_in_usd ?? 0) || 0;
             }
           })
         );
 
         const traders = Array.from(walletStats.values())
           .filter((w) => w.trades >= minTrades)
-          .map((w) => ({
-            ...w,
-            win_rate: parseFloat((w.wins / w.trades).toFixed(4)),
-          }))
-          .filter((w) => w.win_rate >= minWinRate)
-          .sort((a, b) => b.win_rate - a.win_rate)
+          .map((w) => ({ ...w, total_volume_usd: parseFloat(w.total_volume_usd.toFixed(2)) }))
+          .sort((a, b) => b.total_volume_usd - a.total_volume_usd || b.trades - a.trades)
           .slice(0, limit);
 
-        const data = { traders, fetched_at: Date.now() };
+        const data = {
+          traders,
+          ranked_by: "total_volume_usd",
+          note: "Wallets are ranked by observed trade count and USD volume on trending pools, not by profitability. A single trades snapshot cannot establish a win rate or realized PnL.",
+          fetched_at: Date.now(),
+        };
         sdk.storage.set(cacheKey, data, { ttl: 300_000 });
 
         return { success: true, data };
@@ -1796,7 +1793,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_trader_performance",
     description:
-      "Analyse the recent on-chain trading performance of a specific wallet: win rate, total PnL estimate, most-traded tokens, and active pools. Use before deciding to copy a trader.",
+      "Analyse a wallet's recent on-chain swap activity: swap count, buys vs sells, net TON flow (same-unit, not realized profit), and most-traded tokens. Use before deciding to copy a trader.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -1834,23 +1831,33 @@ export const tools = (sdk) => [
         const events = json?.events ?? [];
 
         let swaps = 0;
-        let wins = 0;
+        let buys = 0;
+        let sells = 0;
+        let tonSpent = 0;
+        let tonReceived = 0;
         const tokenFrequency = new Map();
 
         for (const event of events) {
           for (const action of (event.actions ?? [])) {
             if (action.type !== "JettonSwap") continue;
             swaps += 1;
-            const jetton = action.JettonSwap?.jetton_master_in?.address ?? null;
+            const swap = action.JettonSwap ?? {};
+            const jetton = swap.jetton_master_in?.address ?? swap.jetton_master_out?.address ?? null;
             if (jetton) tokenFrequency.set(jetton, (tokenFrequency.get(jetton) ?? 0) + 1);
-            // Heuristic win: received more value out than paid in (by token amounts)
-            const amtIn = parseFloat(action.JettonSwap?.amount_in ?? 0);
-            const amtOut = parseFloat(action.JettonSwap?.amount_out ?? 0);
-            if (amtOut > amtIn) wins += 1;
+            // The old "win" heuristic compared amount_in vs amount_out, but those count
+            // two *different* jettons (e.g. 1 TON in, 5,000,000 memecoin out) — comparing
+            // them is meaningless and always flagged a "win" (issue #182). ton_in and
+            // ton_out are both nanotons (one common unit), so we aggregate the TON leg
+            // instead: how much TON the wallet paid vs received across the window.
+            const tonIn = (Number(swap.ton_in ?? 0) || 0) / 1e9;   // TON the wallet paid
+            const tonOut = (Number(swap.ton_out ?? 0) || 0) / 1e9; // TON the wallet received
+            tonSpent += tonIn;
+            tonReceived += tonOut;
+            if (tonIn > 0) buys += 1;
+            else if (tonOut > 0) sells += 1;
           }
         }
 
-        const winRate = swaps > 0 ? parseFloat((wins / swaps).toFixed(4)) : null;
         const topTokens = Array.from(tokenFrequency.entries())
           .sort((a, b) => b[1] - a[1])
           .slice(0, 5)
@@ -1860,9 +1867,13 @@ export const tools = (sdk) => [
           wallet_address,
           analysed_events: events.length,
           total_swaps: swaps,
-          wins,
-          win_rate: winRate,
+          buys,
+          sells,
+          ton_spent: parseFloat(tonSpent.toFixed(4)),
+          ton_received: parseFloat(tonReceived.toFixed(4)),
+          net_ton_flow: parseFloat((tonReceived - tonSpent).toFixed(4)),
           top_tokens: topTokens,
+          note: "net_ton_flow is the net TON moved across the observed swaps, not realized profit — cost basis and open jetton inventory are not tracked.",
           fetched_at: Date.now(),
         };
 
@@ -3455,7 +3466,72 @@ export const tools = (sdk) => [
 
         // Calculate portfolio metrics
         const totalOpenPositions = openTrades.length;
-        const totalExposureTon = openTrades.reduce((sum, t) => sum + (t.from_asset === "TON" ? (t.amount_in ?? 0) : 0), 0);
+
+        // Per-position unrealized P&L and TON exposure, all bridged through USD so
+        // the figures are unit-safe (issue #182). A position is valued only when
+        // both its entry price (USD cost basis of the funding asset) and the held
+        // asset's current USD price are known; otherwise it is reported as unvalued
+        // rather than mixing incompatible units. Held-asset prices follow the same
+        // rules as inferAssetPriceUsd (TON via the live feed, stablecoins = $1,
+        // arbitrary jettons = unknown) and reuse the already-fetched TON price so
+        // no extra network calls are made.
+        const priceUsdFor = (asset) =>
+          asset === "TON" ? tonPriceUsd : (isStablecoin(asset) ? 1 : null);
+
+        let unrealizedPnlUsd = 0;
+        let valuedPositions = 0;
+        let totalExposureTon = 0;
+        let exposureComplete = true;
+
+        const openTradesDetail = openTrades.map((t) => {
+          const amountIn = toFiniteNumber(t.amount_in);
+          const amountOut = toFiniteNumber(t.amount_out);
+          const entryPriceUsd = toFiniteNumber(t.entry_price_usd);
+          const currentPriceUsd = priceUsdFor(t.to_asset);
+
+          const costBasisUsd =
+            entryPriceUsd != null && amountIn != null ? amountIn * entryPriceUsd : null;
+          const currentValueUsd =
+            currentPriceUsd != null && amountOut != null ? amountOut * currentPriceUsd : null;
+
+          let posUnrealizedUsd = null;
+          let posUnrealizedPct = null;
+          if (costBasisUsd != null && currentValueUsd != null) {
+            posUnrealizedUsd = currentValueUsd - costBasisUsd;
+            posUnrealizedPct = costBasisUsd !== 0 ? (posUnrealizedUsd / costBasisUsd) * 100 : null;
+            unrealizedPnlUsd += posUnrealizedUsd;
+            valuedPositions += 1;
+          }
+
+          // TON exposure = capital deployed, expressed in TON. TON-funded legs use
+          // their raw amount (robust even if the TON price feed is down); other
+          // legs bridge their USD cost basis through the TON price when available.
+          // Previously only TON-funded positions counted, understating exposure.
+          if (t.from_asset === "TON") {
+            if (amountIn != null) totalExposureTon += amountIn;
+            else exposureComplete = false;
+          } else if (costBasisUsd != null && tonPriceUsd) {
+            totalExposureTon += costBasisUsd / tonPriceUsd;
+          } else {
+            exposureComplete = false;
+          }
+
+          return {
+            trade_id: t.id,
+            mode: t.mode,
+            from_asset: t.from_asset,
+            to_asset: t.to_asset,
+            amount_in: t.amount_in,
+            amount_out: t.amount_out ?? null,
+            entry_price_usd: t.entry_price_usd,
+            current_price_usd: currentPriceUsd,
+            cost_basis_usd: costBasisUsd != null ? parseFloat(costBasisUsd.toFixed(4)) : null,
+            current_value_usd: currentValueUsd != null ? parseFloat(currentValueUsd.toFixed(4)) : null,
+            unrealized_pnl_usd: posUnrealizedUsd != null ? parseFloat(posUnrealizedUsd.toFixed(4)) : null,
+            unrealized_pnl_percent: posUnrealizedPct != null ? parseFloat(posUnrealizedPct.toFixed(4)) : null,
+            opened_at: t.timestamp,
+          };
+        });
 
         const stats = summarizeClosedPnl(closedTrades);
         const realizedPnl = stats.realizedPnl;
@@ -3472,6 +3548,16 @@ export const tools = (sdk) => [
             ton_price_usd: tonPriceUsd,
             open_positions: totalOpenPositions,
             total_exposure_ton: parseFloat(totalExposureTon.toFixed(4)),
+            // True when every open position could be expressed in TON; false when
+            // at least one position's funding asset has no known USD price, so the
+            // exposure figure is a lower bound rather than the full total.
+            exposure_complete: exposureComplete,
+            // Sum of unrealized P&L over positions that could be valued (null when
+            // none could be). valued/unvalued counts make the coverage explicit so
+            // the figure is never silently understated (issue #182).
+            unrealized_pnl_usd: valuedPositions > 0 ? parseFloat(unrealizedPnlUsd.toFixed(4)) : null,
+            valued_open_positions: valuedPositions,
+            unvalued_open_positions: totalOpenPositions - valuedPositions,
             realized_pnl_usd: parseFloat(realizedPnl.toFixed(4)),
             total_closed_trades: stats.total,
             win_count: stats.win,
@@ -3483,15 +3569,7 @@ export const tools = (sdk) => [
             unscored_count: stats.unscored,
             // Win rate over decisive trades only (wins + losses); null when none.
             win_rate: stats.winRate != null ? parseFloat(stats.winRate.toFixed(4)) : null,
-            open_trades: openTrades.map((t) => ({
-              trade_id: t.id,
-              mode: t.mode,
-              from_asset: t.from_asset,
-              to_asset: t.to_asset,
-              amount_in: t.amount_in,
-              entry_price_usd: t.entry_price_usd,
-              opened_at: t.timestamp,
-            })),
+            open_trades: openTradesDetail,
           },
         };
       } catch (err) {

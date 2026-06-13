@@ -1698,6 +1698,45 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.deepEqual(result.data, cachedData);
     });
+
+    it("ranks active wallets by volume instead of a unit-mixing fake win rate (issue #182)", async () => {
+      // A high-volume wallet whose trades all show price_to < price_from. The old
+      // code computed isWin = (price_to_in_currency_token - price_from_in_currency_token) > 0
+      // — subtracting the prices of two *different* tokens — got a 0% win rate and
+      // dropped the wallet below the 0.55 min_win_rate default. Volume is the only
+      // genuinely same-unit signal, so the honest ranking keeps the wallet.
+      const trades = Array.from({ length: 12 }, () => ({
+        attributes: {
+          tx_from_address: "EQWhale",
+          kind: "sell",
+          price_from_in_currency_token: "2",
+          price_to_in_currency_token: "1",
+          volume_in_usd: "100",
+        },
+      }));
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = async (url) => {
+        if (String(url).includes("trending_pools")) {
+          return { ok: true, status: 200, json: async () => ({ data: [{ id: "ton_EQPool1" }] }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: trades }) };
+      };
+      try {
+        const sdk = makeSdk();
+        const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_top_traders");
+        const result = await tool.execute({}, {});
+        assert.equal(result.success, true);
+        const whale = result.data.traders.find((t) => t.wallet === "EQWhale");
+        assert.ok(whale, "high-volume wallet must survive ranking, not be filtered by a fake win rate");
+        assert.equal(whale.trades, 12);
+        assert.equal(whale.total_volume_usd, 1200);
+        assert.equal(whale.win_rate, undefined, "no fabricated win_rate should be reported");
+        assert.equal(result.data.ranked_by, "total_volume_usd");
+        assert.ok(/not by profitability|cannot establish/i.test(result.data.note ?? ""));
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
   });
 
   // ── ton_trading_get_trader_performance ─────────────────────────────────────
@@ -1715,6 +1754,50 @@ describe("ton-trading-bot plugin", () => {
       const result = await tool.execute({ wallet_address: "EQTest" }, {});
       assert.equal(result.success, true);
       assert.deepEqual(result.data, cachedData);
+    });
+
+    it("uses same-unit TON flow instead of comparing two different jetton amounts (issue #182)", async () => {
+      // Buying a memecoin: paid 1 TON, received 5,000,000 memecoin units. The old
+      // "win" heuristic compared amount_out (5,000,000) > amount_in (1) across two
+      // *different* jettons and always scored it a win (win_rate 1.0). ton_in/ton_out
+      // are both nanotons, so the honest net flow is -1 TON.
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          events: [
+            {
+              actions: [
+                {
+                  type: "JettonSwap",
+                  JettonSwap: {
+                    amount_in: "1",
+                    amount_out: "5000000",
+                    ton_in: 1_000_000_000,
+                    ton_out: 0,
+                    jetton_master_out: { address: "EQMeme" },
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      try {
+        const sdk = makeSdk();
+        const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_trader_performance");
+        const result = await tool.execute({ wallet_address: "EQTrader" }, {});
+        assert.equal(result.success, true);
+        assert.equal(result.data.total_swaps, 1);
+        assert.equal(result.data.buys, 1);
+        assert.equal(result.data.sells, 0);
+        assert.equal(result.data.net_ton_flow, -1, "spent 1 TON, received 0 → net -1 TON");
+        assert.equal(result.data.win_rate, undefined, "no fabricated win_rate should be reported");
+        assert.ok(/not realized profit/i.test(result.data.note ?? ""));
+      } finally {
+        globalThis.fetch = origFetch;
+      }
     });
   });
 
@@ -3260,6 +3343,58 @@ describe("ton-trading-bot plugin", () => {
       const result = await tool.execute({ mode: "simulation" }, makeContext());
       assert.equal(result.success, true);
       assert.equal(result.data.mode, "simulation");
+    });
+
+    it("computes unit-safe unrealized P&L and full TON exposure for open positions (issue #182)", async () => {
+      // Three open positions; TON = 3.5 USD:
+      //  A) bought 10 TON for 30 USDT (entry $1) → value 10*3.5=35, cost 30 → +5 USD
+      //  B) bought 35 USDT for 10 TON (entry $3.5) → value 35*1=35, cost 35 → 0 USD
+      //  C) bought an unknown jetton with 4 TON → held asset price unknown → unvalued
+      const openRows = [
+        { id: 1, mode: "simulation", from_asset: "USDT", to_asset: "TON", amount_in: 30, amount_out: 10, entry_price_usd: 1, timestamp: 1 },
+        { id: 2, mode: "simulation", from_asset: "TON", to_asset: "USDT", amount_in: 10, amount_out: 35, entry_price_usd: 3.5, timestamp: 2 },
+        { id: 3, mode: "simulation", from_asset: "TON", to_asset: "EQUnknownJetton", amount_in: 4, amount_out: 400, entry_price_usd: 3.5, timestamp: 3 },
+      ];
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: { quote: async () => null, swap: async () => null },
+        },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => null,
+            all: () => (sql.includes("status = 'open'") ? openRows : []),
+            run: () => ({ lastInsertRowid: 1, changes: 1 }),
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_portfolio_summary");
+      const result = await tool.execute({}, makeContext());
+
+      assert.equal(result.success, true);
+      // Aggregate unrealized P&L = +5 (A) + 0 (B); C is unvalued and excluded.
+      assert.equal(result.data.unrealized_pnl_usd, 5);
+      assert.equal(result.data.valued_open_positions, 2);
+      assert.equal(result.data.unvalued_open_positions, 1);
+      assert.equal(result.data.open_positions, 3);
+      // Exposure in TON: A bridges 30 USD / 3.5 = 8.5714, B = 10 TON, C = 4 TON.
+      assert.ok(
+        Math.abs(result.data.total_exposure_ton - (30 / 3.5 + 10 + 4)) < 1e-3,
+        `Unexpected exposure: ${result.data.total_exposure_ton}`
+      );
+      assert.equal(result.data.exposure_complete, true);
+      // Per-position: A is in profit, C cannot be valued.
+      const posA = result.data.open_trades.find((p) => p.trade_id === 1);
+      const posC = result.data.open_trades.find((p) => p.trade_id === 3);
+      assert.equal(posA.unrealized_pnl_usd, 5);
+      assert.ok(Math.abs(posA.unrealized_pnl_percent - 16.6667) < 1e-3);
+      assert.equal(posA.current_price_usd, 3.5);
+      assert.equal(posC.unrealized_pnl_usd, null);
+      assert.equal(posC.current_price_usd, null);
     });
   });
 
