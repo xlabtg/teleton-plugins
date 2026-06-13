@@ -108,7 +108,7 @@ export function migrate(db) {
       exit_price_usd REAL,          -- USD price of to_asset at exit (for cross-currency P&L)
       pnl REAL,
       pnl_percent REAL,
-      status TEXT NOT NULL,         -- 'open' | 'closed' | 'failed'
+      status TEXT NOT NULL,         -- 'open' | 'closing' | 'closed' | 'failed' | 'close_failed'
       tx_hash TEXT,
       note TEXT
     );
@@ -357,13 +357,21 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
     pnlPercent = amountIn > 0 ? (pnl / amountIn) * 100 : 0;
   }
 
-  sdk.db
+  // Close atomically: the WHERE guard makes this a compare-and-swap so two
+  // concurrent record_trade / close calls can't both pass the in-memory
+  // status check and then each credit the simulation balance or double-count
+  // P&L for the same position (issue #182).
+  const closeUpdate = sdk.db
     .prepare(
       `UPDATE trade_journal
        SET amount_out = ?, exit_price_usd = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
-       WHERE id = ?`
+       WHERE id = ? AND status != 'closed'`
     )
     .run(amountOutNumber, exitPrice ?? null, pnl, pnlPercent, note ?? null, entry.id);
+
+  if (closeUpdate.changes !== 1) {
+    return { success: false, error: `Trade ${entry.id} is already closed` };
+  }
 
   if (entry.mode === "simulation" && entry.from_asset === "TON") {
     const simBalance = getSimBalance(sdk);
@@ -568,22 +576,50 @@ async function closeOpenPosition(sdk, entry, params, context) {
   let closeDex = dex ?? null;
   let minOutput = null;
 
+  // Atomically claim the position before doing anything that moves funds or
+  // records a close. Both a retry and a concurrent close read entry.status as
+  // 'open' from the in-memory row, so without a compare-and-swap they would each
+  // fire a real reverse-swap against the same funds (issue #182). Only the
+  // caller that flips 'open' → 'closing' in the DB proceeds.
+  const claim = sdk.db
+    .prepare("UPDATE trade_journal SET status = 'closing' WHERE id = ? AND status = 'open'")
+    .run(entry.id);
+  if (claim.changes !== 1) {
+    return { success: false, error: `Trade ${entry.id} is already being closed or is not open` };
+  }
+  const releaseClaim = () =>
+    sdk.db
+      .prepare("UPDATE trade_journal SET status = 'open' WHERE id = ? AND status = 'closing'")
+      .run(entry.id);
+
   if (entry.mode === "simulation") {
-    if (entry.to_asset === entry.from_asset) {
-      closeAmountOut = closeAmount;
-      closeDex = "none";
-    } else {
-      const quote = await sdk.ton.dex.quote({
-        fromAsset: entry.to_asset,
-        toAsset: entry.from_asset,
-        amount: closeAmount,
-      });
-      closeAmountOut = getDexOutput(quote, dex);
-      closeDex = getDexName(quote, dex);
+    try {
+      if (entry.to_asset === entry.from_asset) {
+        closeAmountOut = closeAmount;
+        closeDex = "none";
+      } else {
+        const quote = await sdk.ton.dex.quote({
+          fromAsset: entry.to_asset,
+          toAsset: entry.from_asset,
+          amount: closeAmount,
+        });
+        closeAmountOut = getDexOutput(quote, dex);
+        closeDex = getDexName(quote, dex);
+      }
+    } catch (simErr) {
+      // No real funds moved in simulation — release the claim so the position
+      // can be closed again on a later retry.
+      releaseClaim();
+      throw simErr;
+    }
+    if (closeAmountOut == null) {
+      releaseClaim();
+      return { success: false, error: `Could not determine close output for trade ${entry.id}` };
     }
   } else {
     const walletAddress = sdk.ton.getAddress();
     if (!walletAddress) {
+      releaseClaim();
       return { success: false, error: "Wallet not initialized" };
     }
 
@@ -596,10 +632,35 @@ async function closeOpenPosition(sdk, entry, params, context) {
       return null;
     });
 
-    const swapResult = await sdk.ton.dex.swap(closeSwapParams);
+    // The reverse swap is the irreversible step. If it throws, the on-chain
+    // state is unknown (funds may or may not have moved), so the trade is left
+    // terminally 'close_failed' rather than released — an auto-retry could
+    // double-spend. A human reconciles from the journal (issue #182).
+    let swapResult;
+    try {
+      swapResult = await sdk.ton.dex.swap(closeSwapParams);
+    } catch (swapErr) {
+      sdk.db
+        .prepare("UPDATE trade_journal SET status = 'close_failed', note = COALESCE(?, note) WHERE id = ?")
+        .run(`close swap failed: ${String(swapErr.message).slice(0, 200)}`, entry.id);
+      throw swapErr;
+    }
+
     minOutput = toFiniteNumber(swapResult?.minOutput);
     closeAmountOut = getDexOutput(swapResult, dex) ?? getDexOutput(quote, dex) ?? minOutput;
     closeDex = getDexName(swapResult, dex);
+
+    if (closeAmountOut == null) {
+      // The swap executed but its output is unknown — terminal, never silently
+      // reopen a position whose funds were already spent.
+      sdk.db
+        .prepare("UPDATE trade_journal SET status = 'close_failed', note = COALESCE(?, note) WHERE id = ?")
+        .run("close swap output unknown — reconcile manually", entry.id);
+      return {
+        success: false,
+        error: `Could not determine close output for trade ${entry.id}; the reverse swap may have executed — reconcile manually`,
+      };
+    }
 
     try {
       await sdk.telegram.sendMessage(
@@ -613,10 +674,6 @@ async function closeOpenPosition(sdk, entry, params, context) {
         sdk.log.warn(`Could not send close confirmation message: ${msgErr.message}`);
       }
     }
-  }
-
-  if (closeAmountOut == null) {
-    return { success: false, error: `Could not determine close output for trade ${entry.id}` };
   }
 
   const closeResult = closeTradeJournalEntry(

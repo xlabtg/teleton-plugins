@@ -29,7 +29,7 @@ function makeMockDb(rows = {}) {
           return null;
         },
         all: () => rows.trades ?? [],
-        run: () => ({ lastInsertRowid: rows.lastInsertRowid ?? 1 }),
+        run: () => ({ lastInsertRowid: rows.lastInsertRowid ?? 1, changes: rows.changes ?? 1 }),
       };
     },
   };
@@ -170,18 +170,41 @@ function makeStatefulDb() {
           return { lastInsertRowid: row.id, changes: 1 };
         }
         if (sql.includes("UPDATE trade_journal")) {
-          // binds: amount_out, exit_price_usd, pnl, pnl_percent, note, id
-          const id = args[5];
-          const row = trades.find((t) => t.id === id);
-          if (row) {
+          // Full close (closeTradeJournalEntry): SET amount_out=?, exit_price_usd=?,
+          // pnl=?, pnl_percent=?, status='closed', note=COALESCE(?, note) WHERE id=?
+          if (sql.includes("SET amount_out")) {
+            const id = args[5];
+            const row = trades.find((t) => t.id === id);
+            // WHERE id = ? AND status != 'closed' — already-closed rows are not
+            // matched, so a second close affects 0 rows (issue #182).
+            if (!row || row.status === "closed") return { lastInsertRowid: id, changes: 0 };
             row.amount_out = args[0];
             row.exit_price_usd = args[1];
             row.pnl = args[2];
             row.pnl_percent = args[3];
             if (args[4] != null) row.note = args[4];
             row.status = "closed";
+            return { lastInsertRowid: id, changes: 1 };
           }
-          return { lastInsertRowid: id, changes: row ? 1 : 0 };
+          // Status transitions for the close compare-and-swap (issue #182):
+          //   claim    SET status='closing'      WHERE id=? AND status='open'
+          //   release  SET status='open'         WHERE id=? AND status='closing'
+          //   terminal SET status='close_failed', note=COALESCE(?, note) WHERE id=?
+          // Mirror SQLite's "changes" so the guard can actually be tested.
+          let target = null;
+          if (sql.includes("SET status = 'closing'")) target = "closing";
+          else if (sql.includes("SET status = 'open'")) target = "open";
+          else if (sql.includes("SET status = 'close_failed'")) target = "close_failed";
+          let guard = null;
+          if (sql.includes("AND status = 'open'")) guard = "open";
+          else if (sql.includes("AND status = 'closing'")) guard = "closing";
+          const id = args[args.length - 1];
+          const row = trades.find((t) => t.id === id);
+          if (!row) return { lastInsertRowid: id, changes: 0 };
+          if (guard && row.status !== guard) return { lastInsertRowid: id, changes: 0 };
+          if (target === "close_failed" && args[0] != null) row.note = args[0];
+          if (target) row.status = target;
+          return { lastInsertRowid: id, changes: 1 };
         }
         if (sql.includes("INSERT INTO scheduled_trades")) {
           // binds: created_at, execute_at, mode, from, to, amount, note
@@ -625,7 +648,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -877,7 +900,7 @@ describe("ton-trading-bot plugin", () => {
                 capturedSql = sql;
                 capturedArgs = args;
               }
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -1268,10 +1291,13 @@ describe("ton-trading-bot plugin", () => {
             },
             all: () => [],
             run: (...args) => {
-              if (sql.includes("UPDATE trade_journal")) updatedTradeArgs = args;
+              // The close path issues two UPDATE trade_journal statements: the
+              // 'open'→'closing' claim, then the full close. Capture only the
+              // full close so the assertions still see the P&L row.
+              if (sql.includes("UPDATE trade_journal") && sql.includes("SET amount_out")) updatedTradeArgs = args;
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
               if (sql.includes("UPDATE stop_loss_rules")) closedRulesForTrade = args[0];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -1352,6 +1378,62 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.close.dex, "stonfi");
     });
 
+    it("never fires a second reverse swap when a real close races with itself (issue #182)", async () => {
+      const db = makeStatefulDb();
+      // Seed one real open position directly into the in-memory journal.
+      db._trades.push({
+        id: 1,
+        timestamp: 1,
+        mode: "real",
+        action: "buy",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: 25,
+        entry_price_usd: 2,
+        exit_price_usd: null,
+        pnl: null,
+        pnl_percent: null,
+        status: "open",
+        note: null,
+      });
+      let swapCalls = 0;
+      const sdk = makeStatefulSdk({
+        db,
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 2.2, source: "mock", timestamp: 1 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "11", price: "11" }, recommended: "stonfi" }),
+            swap: async () => {
+              swapCalls += 1;
+              return { expectedOutput: "11", minOutput: "10.5", dex: "stonfi" };
+            },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_position");
+      // Two concurrent closes both read the position as 'open'. Without the
+      // compare-and-swap claim each would submit its own reverse swap, spending
+      // the same funds twice.
+      const [r1, r2] = await Promise.all([
+        tool.execute({ trade_id: 1, mode: "real", slippage: 0.02, dex: "stonfi" }, makeContext()),
+        tool.execute({ trade_id: 1, mode: "real", slippage: 0.02, dex: "stonfi" }, makeContext()),
+      ]);
+      const successes = [r1, r2].filter((r) => r.success);
+      const failures = [r1, r2].filter((r) => !r.success);
+      assert.equal(successes.length, 1, "exactly one close should succeed");
+      assert.equal(failures.length, 1, "the racing close should be rejected");
+      assert.ok(
+        /already being closed|is not open/.test(failures[0].error),
+        `unexpected rejection reason: ${failures[0].error}`
+      );
+      assert.equal(swapCalls, 1, "the reverse swap must fire exactly once");
+      assert.equal(db._trades[0].status, "closed");
+    });
+
     it("closes all open positions for the selected mode", async () => {
       const openTrades = [
         { id: 24, mode: "simulation", from_asset: "TON", to_asset: "EQTokenA", amount_in: 5, amount_out: 8, status: "open" },
@@ -1381,8 +1463,10 @@ describe("ton-trading-bot plugin", () => {
             },
             all: () => openTrades,
             run: () => {
-              if (sql.includes("UPDATE trade_journal")) updatedCount += 1;
-              return { lastInsertRowid: 1 };
+              // Count only the full close, not the 'open'→'closing' claim that
+              // now precedes it (issue #182).
+              if (sql.includes("UPDATE trade_journal") && sql.includes("SET amount_out")) updatedCount += 1;
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2521,7 +2605,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2565,7 +2649,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2603,7 +2687,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2647,7 +2731,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2697,7 +2781,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2731,6 +2815,46 @@ describe("ton-trading-bot plugin", () => {
         `balance must NOT be the over-credited buggy value ~${buggyBalance.toFixed(3)}, got ${savedBalance}`
       );
     });
+
+    it("never double-credits the simulation balance when record_trade races with itself (issue #182)", async () => {
+      const db = makeStatefulDb();
+      db._simBalanceRows.push({ timestamp: 1, balance: 100 });
+      // A simulation TON position: entry_price_usd is set so record_trade awaits
+      // inferExitPriceUsd, giving the second concurrent call a chance to read the
+      // position as 'open' before the first one closes it.
+      db._trades.push({
+        id: 1,
+        timestamp: 1,
+        mode: "simulation",
+        action: "buy",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: null,
+        entry_price_usd: 2,
+        exit_price_usd: null,
+        pnl: null,
+        pnl_percent: null,
+        status: "open",
+        note: null,
+      });
+      const sdk = makeStatefulSdk({ db });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const [r1, r2] = await Promise.all([
+        tool.execute({ trade_id: 1, amount_out: 11, exit_price_usd: 2 }, makeContext()),
+        tool.execute({ trade_id: 1, amount_out: 11, exit_price_usd: 2 }, makeContext()),
+      ]);
+      const successes = [r1, r2].filter((r) => r.success);
+      const failures = [r1, r2].filter((r) => !r.success);
+      assert.equal(successes.length, 1, "only one record_trade should close the position");
+      assert.equal(failures.length, 1, "the racing record_trade must be rejected");
+      assert.ok(/already closed/.test(failures[0].error), `unexpected error: ${failures[0].error}`);
+      // Break-even (entry=exit=$2) credits the 10 TON principal exactly once:
+      // 100 + 10 = 110. A double credit would yield 120.
+      const finalBalance = db._simBalanceRows[db._simBalanceRows.length - 1].balance;
+      assert.equal(finalBalance, 110, `balance must be credited exactly once (110), got ${finalBalance}`);
+      assert.equal(db._trades[0].status, "closed");
+    });
   });
 
   // ── ton_trading_reset_simulation_balance ────────────────────────────────────
@@ -2746,7 +2870,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2771,7 +2895,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2798,7 +2922,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
