@@ -99,6 +99,83 @@ function makeContext(overrides = {}) {
   };
 }
 
+// ─── Stateful in-memory DB ────────────────────────────────────────────────────
+// Unlike makeMockDb (which returns static rows), this mock actually persists
+// INSERTs and applies UPDATEs so an open→close trade cycle can be exercised
+// end-to-end (used to reproduce issue #182).
+function makeStatefulDb() {
+  const trades = [];
+  const simBalanceRows = [];
+  let tradeSeq = 0;
+
+  return {
+    _trades: trades,
+    _simBalanceRows: simBalanceRows,
+    exec: () => {},
+    prepare: (sql) => ({
+      get: (...args) => {
+        if (sql.includes("FROM sim_balance")) {
+          return simBalanceRows.length ? simBalanceRows[simBalanceRows.length - 1] : null;
+        }
+        if (sql.includes("FROM trade_journal") && sql.includes("WHERE id")) {
+          return trades.find((t) => t.id === args[0]) ?? null;
+        }
+        return null;
+      },
+      all: () => trades.slice(),
+      run: (...args) => {
+        if (sql.includes("INSERT INTO sim_balance")) {
+          simBalanceRows.push({ timestamp: args[0], balance: args[1] });
+          return { lastInsertRowid: simBalanceRows.length };
+        }
+        if (sql.includes("INSERT INTO trade_journal")) {
+          const real = sql.includes("'real'");
+          // simulation INSERT binds: timestamp, from, to, amount_in, amount_out, entry_price_usd, note
+          // real INSERT binds:       timestamp, from, to, amount_in, amount_out, entry_price_usd
+          const row = {
+            id: ++tradeSeq,
+            timestamp: args[0],
+            mode: real ? "real" : "simulation",
+            action: "buy",
+            from_asset: args[1],
+            to_asset: args[2],
+            amount_in: args[3],
+            amount_out: args[4] ?? null,
+            entry_price_usd: args[5] ?? null,
+            exit_price_usd: null,
+            pnl: null,
+            pnl_percent: null,
+            status: "open",
+            note: real ? null : (args[6] ?? null),
+          };
+          trades.push(row);
+          return { lastInsertRowid: row.id };
+        }
+        if (sql.includes("UPDATE trade_journal")) {
+          // binds: amount_out, exit_price_usd, pnl, pnl_percent, note, id
+          const id = args[5];
+          const row = trades.find((t) => t.id === id);
+          if (row) {
+            row.amount_out = args[0];
+            row.exit_price_usd = args[1];
+            row.pnl = args[2];
+            row.pnl_percent = args[3];
+            if (args[4] != null) row.note = args[4];
+            row.status = "closed";
+          }
+          return { lastInsertRowid: id };
+        }
+        return { lastInsertRowid: 1 };
+      },
+    }),
+  };
+}
+
+function makeStatefulSdk(overrides = {}) {
+  const db = overrides.db ?? makeStatefulDb();
+  return { ...makeSdk(overrides), db };
+}
+
 // ─── Load plugin once ─────────────────────────────────────────────────────────
 
 let mod;
@@ -824,6 +901,111 @@ describe("ton-trading-bot plugin", () => {
         `pnl_percent should be ~-0.08%, got ${result.data.pnl_percent}`
       );
       assert.equal(result.data.profit_or_loss, "loss");
+    });
+  });
+
+  // ── Unit-safe P&L end-to-end (issue #182) ─────────────────────────────────
+  describe("unit-safe P&L (issue #182)", () => {
+    it("auto-records the from_asset USD price as entry_price_usd when omitted (TON)", async () => {
+      const sdk = makeSdk({
+        dbRows: { simBalance: { balance: 1000 }, lastInsertRowid: 1 },
+        ton: { ...makeSdk().ton, getPrice: async () => ({ usd: 1.6809, source: "mock" }) },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_simulate_trade");
+      // Agent omits entry_price_usd entirely (the root cause of #182).
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "USDT", amount_in: 10, expected_amount_out: 16.8 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(
+        result.data.entry_price_usd,
+        1.6809,
+        "entry_price_usd should be auto-inferred from the live TON price"
+      );
+    });
+
+    it("auto-records $1 entry price for a stablecoin from_asset when omitted", async () => {
+      const sdk = makeSdk({ dbRows: { simBalance: { balance: 1000 }, lastInsertRowid: 1 } });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_simulate_trade");
+      const result = await tool.execute(
+        { from_asset: "USDT", to_asset: "TON", amount_in: 50, expected_amount_out: 30 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.entry_price_usd, 1, "stablecoin entry price should default to $1");
+    });
+
+    it("reproduces issue #182: flat TON/USDT round trip yields a tiny P&L, not $7.39 / 73.89%", async () => {
+      // Exact scenario from the bug report: open a TON→USDT simulation trade
+      // WITHOUT supplying entry_price_usd, then close it. The old code mixed
+      // units (raw TON treated as USD vs USD value) and reported +$7.39 / +73.89%
+      // on a position whose TON price barely moved ($1.6809 → $1.73886).
+      const prices = [1.6809, 1.73886]; // entry price first, exit price second
+      let priceCall = 0;
+      const sdk = makeStatefulSdk({
+        ton: {
+          ...makeSdk().ton,
+          getPrice: async () => ({ usd: prices[Math.min(priceCall++, prices.length - 1)], source: "mock" }),
+        },
+      });
+      const tools = mod.tools(sdk);
+      const simulate = tools.find((t) => t.name === "ton_trading_simulate_trade");
+      const record = tools.find((t) => t.name === "ton_trading_record_trade");
+
+      const open = await simulate.execute(
+        { from_asset: "TON", to_asset: "USDT", amount_in: 10, expected_amount_out: 16.8 },
+        makeContext()
+      );
+      assert.equal(open.success, true);
+
+      const close = await record.execute(
+        { trade_id: open.data.trade_id, amount_out: 17.3886 },
+        makeContext()
+      );
+      assert.equal(close.success, true);
+
+      // Correct P&L ≈ 10 * (1.73886 - 1.6809) = $0.5796, ≈ +3.45%.
+      assert.ok(
+        Math.abs(close.data.pnl - 0.5796) < 0.01,
+        `pnl should be ≈ $0.58, got ${close.data.pnl}`
+      );
+      assert.ok(
+        Math.abs(close.data.pnl_percent - 3.45) < 0.1,
+        `pnl_percent should be ≈ 3.45%, got ${close.data.pnl_percent}`
+      );
+      // Guard against the original unit-mismatch bug explicitly.
+      assert.ok(close.data.pnl < 1, `pnl must not be the buggy ~$7.39, got ${close.data.pnl}`);
+      assert.ok(close.data.pnl_percent < 10, `pnl_percent must not be the buggy ~73.89%, got ${close.data.pnl_percent}`);
+    });
+
+    it("never mixes units: missing entry price falls back to raw same-unit diff, not USD scaling", async () => {
+      // When entry_price_usd is unknown we must NOT scale amount_in by the exit
+      // USD price (that was the #182 bug). With no entry price recorded, closing
+      // must use a unit-consistent raw diff instead of amount_in * exit_price.
+      const openTrade = {
+        id: 50,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "USDT",
+        amount_in: 10,
+        entry_price_usd: null, // never recorded
+        amount_out: null,
+        status: "open",
+      };
+      const sdk = makeSdk({ dbRows: { trade: openTrade } });
+      const record = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      // amount_out is the TON received on a reverse close (≈10.2 TON).
+      const result = await record.execute(
+        { trade_id: 50, amount_out: 10.2, exit_price_usd: 1.73886 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // Old buggy branch: 10 * 1.73886 - 10 = +7.39. Unit-safe branch: 10.2 - 10 = +0.2.
+      assert.ok(
+        Math.abs(result.data.pnl - 0.2) < 1e-9,
+        `pnl should be the raw diff 0.2, got ${result.data.pnl}`
+      );
     });
   });
 

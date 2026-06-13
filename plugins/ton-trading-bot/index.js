@@ -245,13 +245,32 @@ function formatOpenPosition(trade) {
   };
 }
 
+// Known USD-pegged stablecoins on TON. Their price is treated as $1 so trades
+// funded with them get a unit-consistent entry/exit price for P&L.
+const STABLECOIN_SYMBOLS = new Set([
+  "USDT", "USDC", "USDE", "DAI", "TUSD", "USDD", "JUSDT", "JUSDC",
+]);
+
+function isStablecoin(asset) {
+  return typeof asset === "string" && STABLECOIN_SYMBOLS.has(asset.trim().toUpperCase());
+}
+
+// Best-effort USD price for an asset, used to record entry/exit prices so P&L is
+// always computed from same-unit (USD) values. Returns null when the price is
+// genuinely unknown (e.g. an arbitrary jetton) so callers can fall back safely.
+async function inferAssetPriceUsd(sdk, asset) {
+  if (asset === "TON") {
+    const tonPrice = await sdk.ton.getPrice().catch(() => null);
+    return toFiniteNumber(tonPrice?.usd);
+  }
+  if (isStablecoin(asset)) return 1;
+  return null;
+}
+
 async function inferExitPriceUsd(sdk, fromAsset, explicitExitPriceUsd) {
   const explicit = toFiniteNumber(explicitExitPriceUsd);
   if (explicit != null) return explicit;
-
-  if (fromAsset !== "TON") return null;
-  const tonPrice = await sdk.ton.getPrice().catch(() => null);
-  return toFiniteNumber(tonPrice?.usd);
+  return inferAssetPriceUsd(sdk, fromAsset);
 }
 
 function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
@@ -264,11 +283,23 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
     return { success: false, error: "Closing amount_out is required to record P&L" };
   }
 
-  const usdIn = entryPriceUsd != null ? amountIn * entryPriceUsd : amountIn;
-  const usdOut = exitPrice != null ? amountIn * exitPrice : amountOutNumber;
-
-  const pnl = usdOut - usdIn;
-  const pnlPercent = usdIn > 0 ? (pnl / usdIn) * 100 : 0;
+  // P&L must be computed from two values in the SAME unit (issue #182). We never
+  // mix a USD-priced leg with a raw-token leg — that produced nonsense such as
+  // +$7.39 / +73.89% on a flat TON/USDT trade. Two unit-safe modes:
+  //   1. Price-based USD P&L — needs BOTH the entry and exit USD price of the
+  //      base (from_asset): pnl = base_amount * (exit_price - entry_price).
+  //   2. Raw same-unit diff — backward-compatible fallback when prices are
+  //      unavailable; only meaningful when amount_in and amount_out share a unit.
+  const priceBased = entryPriceUsd != null && exitPrice != null;
+  let pnl;
+  let pnlPercent;
+  if (priceBased) {
+    pnl = amountIn * (exitPrice - entryPriceUsd);
+    pnlPercent = entryPriceUsd > 0 ? ((exitPrice - entryPriceUsd) / entryPriceUsd) * 100 : 0;
+  } else {
+    pnl = amountOutNumber - amountIn;
+    pnlPercent = amountIn > 0 ? (pnl / amountIn) * 100 : 0;
+  }
 
   sdk.db
     .prepare(
@@ -692,13 +723,18 @@ export const tools = (sdk) => [
           setSimBalance(sdk, simBalance - amount_in);
         }
 
+        // Record the from_asset USD price at entry so closing P&L is unit-safe
+        // even when the agent omits entry_price_usd (root cause of issue #182).
+        const resolvedEntryPrice =
+          toFiniteNumber(entry_price_usd) ?? (await inferAssetPriceUsd(sdk, from_asset));
+
         const tradeId = sdk.db
           .prepare(
             `INSERT INTO trade_journal
              (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status, note)
              VALUES (?, 'simulation', 'buy', ?, ?, ?, ?, ?, 'open', ?)`
           )
-          .run(Date.now(), from_asset, to_asset, amount_in, expected_amount_out, entry_price_usd ?? null, note ?? null)
+          .run(Date.now(), from_asset, to_asset, amount_in, expected_amount_out, resolvedEntryPrice ?? null, note ?? null)
           .lastInsertRowid;
 
         sdk.log.info(
@@ -714,7 +750,7 @@ export const tools = (sdk) => [
             to_asset,
             amount_in,
             expected_amount_out,
-            entry_price_usd: entry_price_usd ?? null,
+            entry_price_usd: resolvedEntryPrice ?? null,
             new_simulation_balance: from_asset === "TON" ? simBalance - amount_in : simBalance,
             status: "open",
           },
@@ -790,6 +826,11 @@ export const tools = (sdk) => [
           ...(dex ? { dex } : {}),
         });
 
+        // Record the from_asset USD price at entry so closing P&L is unit-safe
+        // even when the agent omits entry_price_usd (issue #182).
+        const resolvedEntryPrice =
+          toFiniteNumber(entry_price_usd) ?? (await inferAssetPriceUsd(sdk, from_asset));
+
         const tradeId = sdk.db
           .prepare(
             `INSERT INTO trade_journal
@@ -802,7 +843,7 @@ export const tools = (sdk) => [
             to_asset,
             parseFloat(amount),
             result?.expectedOutput ? parseFloat(result.expectedOutput) : null,
-            entry_price_usd ?? null
+            resolvedEntryPrice ?? null
           )
           .lastInsertRowid;
 
@@ -830,6 +871,7 @@ export const tools = (sdk) => [
             from_asset,
             to_asset,
             amount_in: amount,
+            entry_price_usd: resolvedEntryPrice ?? null,
             expected_output: result?.expectedOutput ?? null,
             min_output: result?.minOutput ?? null,
             slippage,
@@ -891,7 +933,15 @@ export const tools = (sdk) => [
           return { success: false, error: `Trade ${trade_id} is already closed` };
         }
 
-        const closeResult = closeTradeJournalEntry(sdk, entry, amount_out, exit_price_usd, note);
+        // Mirror close_position: infer the exit price (live TON price or $1 for
+        // stablecoins) when the entry price is known, so P&L stays unit-safe even
+        // if the agent forgets to pass exit_price_usd (issue #182).
+        const shouldUseExitPrice = exit_price_usd != null || entry.entry_price_usd != null;
+        const resolvedExitPrice = shouldUseExitPrice
+          ? await inferExitPriceUsd(sdk, entry.from_asset, exit_price_usd)
+          : null;
+
+        const closeResult = closeTradeJournalEntry(sdk, entry, amount_out, resolvedExitPrice, note);
         if (!closeResult.success) return closeResult;
 
         sdk.log.info(
@@ -2852,6 +2902,13 @@ export const tools = (sdk) => [
           ? parseFloat(dexQuote[dexQuote.recommended]?.output ?? dexQuote[dexQuote.recommended]?.price ?? 0) / amount
           : (tonPrice?.usd ?? null);
 
+        // Entry price must be the from_asset USD price (not always TON) so P&L is
+        // unit-safe; unknown jettons stay null rather than borrowing TON's price.
+        const resolvedEntryPriceUsd =
+          from_asset === "TON"
+            ? toFiniteNumber(tonPrice?.usd)
+            : (isStablecoin(from_asset) ? 1 : null);
+
         const conditions = [];
         let allMet = true;
 
@@ -2939,7 +2996,7 @@ export const tools = (sdk) => [
                (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status, note)
                VALUES (?, 'simulation', 'buy', ?, ?, ?, ?, ?, 'open', 'auto_execute')`
             )
-            .run(Date.now(), from_asset, to_asset, amount, expectedOut, tonPrice?.usd ?? null, null)
+            .run(Date.now(), from_asset, to_asset, amount, expectedOut, resolvedEntryPriceUsd ?? null, null)
             .lastInsertRowid;
 
           if (from_asset === "TON") {
@@ -2965,7 +3022,7 @@ export const tools = (sdk) => [
             .run(
               Date.now(), from_asset, to_asset, amount,
               swapResult?.expectedOutput ? parseFloat(swapResult.expectedOutput) : null,
-              tonPrice?.usd ?? null
+              resolvedEntryPriceUsd ?? null
             )
             .lastInsertRowid;
 
