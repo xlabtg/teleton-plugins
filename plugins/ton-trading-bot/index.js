@@ -37,6 +37,7 @@
  * Automation tools (P2):
  *   - ton_trading_schedule_trade              — store a pending trade for future execution
  *   - ton_trading_get_scheduled_trades        — list pending scheduled trades
+ *   - ton_trading_execute_scheduled_trade     — execute a due order and mark it executed atomically
  *
  * Simulation management tools:
  *   - ton_trading_reset_simulation_balance    — reset virtual balance to starting amount
@@ -78,7 +79,7 @@
 
 export const manifest = {
   name: "ton-trading-bot",
-  version: "2.2.0",
+  version: "2.3.0",
   sdkVersion: ">=1.0.0",
   description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, and risk management.",
   defaultConfig: {
@@ -107,7 +108,7 @@ export function migrate(db) {
       exit_price_usd REAL,          -- USD price of to_asset at exit (for cross-currency P&L)
       pnl REAL,
       pnl_percent REAL,
-      status TEXT NOT NULL,         -- 'open' | 'closed' | 'failed'
+      status TEXT NOT NULL,         -- 'open' | 'closing' | 'closed' | 'failed' | 'close_failed'
       tx_hash TEXT,
       note TEXT
     );
@@ -143,7 +144,7 @@ export function migrate(db) {
       to_asset TEXT NOT NULL,
       amount REAL NOT NULL,
       note TEXT,
-      status TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'executed' | 'cancelled'
+      status TEXT NOT NULL DEFAULT 'pending'  -- 'pending' | 'executed' | 'cancelled' | 'failed'
     );
   `);
 
@@ -155,6 +156,9 @@ export function migrate(db) {
     "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop_percent REAL",
     "ALTER TABLE stop_loss_rules ADD COLUMN peak_price REAL",
+    // Links an executed scheduled trade to the trade_journal row it produced, so
+    // a DCA/grid order can never be silently re-executed (issue #182).
+    "ALTER TABLE scheduled_trades ADD COLUMN trade_id INTEGER",
   ];
   for (const sql of alterColumns) {
     try {
@@ -183,6 +187,58 @@ function setSimBalance(sdk, balance) {
 function toFiniteNumber(value) {
   const number = Number.parseFloat(value);
   return Number.isFinite(number) ? number : null;
+}
+
+// Classify closed trades by realized P&L so every statistics tool reconciles:
+//   total = win + loss + breakeven + unscored
+// A trade is "unscored" when its pnl is null or non-finite (P&L was never
+// recorded). Counting those silently as zero used to break the books — e.g.
+// total_closed_trades=177 while win+loss=172, or "65 losses" with avg loss $0
+// because unscored rows diluted the averages (issue #182). Averages here are
+// taken only over decisive trades so they never drift toward zero.
+function summarizeClosedPnl(trades) {
+  const rows = Array.isArray(trades) ? trades : [];
+  let win = 0;
+  let loss = 0;
+  let breakeven = 0;
+  let unscored = 0;
+  let grossProfit = 0;
+  let grossLoss = 0;
+  let realizedPnl = 0;
+  for (const trade of rows) {
+    const pnl = toFiniteNumber(trade?.pnl);
+    if (pnl == null) {
+      unscored += 1;
+      continue;
+    }
+    realizedPnl += pnl;
+    if (pnl > 0) {
+      win += 1;
+      grossProfit += pnl;
+    } else if (pnl < 0) {
+      loss += 1;
+      grossLoss += pnl;
+    } else {
+      breakeven += 1;
+    }
+  }
+  const decisive = win + loss;
+  return {
+    total: rows.length,
+    win,
+    loss,
+    breakeven,
+    unscored,
+    scored: win + loss + breakeven,
+    realizedPnl,
+    grossProfit,
+    grossLoss,
+    avgWin: win > 0 ? grossProfit / win : 0,
+    avgLoss: loss > 0 ? grossLoss / loss : 0,
+    // Win rate over decisive trades only (wins + losses); null when none are
+    // decisive, so a book of pure breakeven/unscored trades is not "0% win".
+    winRate: decisive > 0 ? win / decisive : null,
+  };
 }
 
 function getDexOutput(result, preferredDex) {
@@ -245,13 +301,32 @@ function formatOpenPosition(trade) {
   };
 }
 
+// Known USD-pegged stablecoins on TON. Their price is treated as $1 so trades
+// funded with them get a unit-consistent entry/exit price for P&L.
+const STABLECOIN_SYMBOLS = new Set([
+  "USDT", "USDC", "USDE", "DAI", "TUSD", "USDD", "JUSDT", "JUSDC",
+]);
+
+function isStablecoin(asset) {
+  return typeof asset === "string" && STABLECOIN_SYMBOLS.has(asset.trim().toUpperCase());
+}
+
+// Best-effort USD price for an asset, used to record entry/exit prices so P&L is
+// always computed from same-unit (USD) values. Returns null when the price is
+// genuinely unknown (e.g. an arbitrary jetton) so callers can fall back safely.
+async function inferAssetPriceUsd(sdk, asset) {
+  if (asset === "TON") {
+    const tonPrice = await sdk.ton.getPrice().catch(() => null);
+    return toFiniteNumber(tonPrice?.usd);
+  }
+  if (isStablecoin(asset)) return 1;
+  return null;
+}
+
 async function inferExitPriceUsd(sdk, fromAsset, explicitExitPriceUsd) {
   const explicit = toFiniteNumber(explicitExitPriceUsd);
   if (explicit != null) return explicit;
-
-  if (fromAsset !== "TON") return null;
-  const tonPrice = await sdk.ton.getPrice().catch(() => null);
-  return toFiniteNumber(tonPrice?.usd);
+  return inferAssetPriceUsd(sdk, fromAsset);
 }
 
 function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
@@ -264,19 +339,39 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
     return { success: false, error: "Closing amount_out is required to record P&L" };
   }
 
-  const usdIn = entryPriceUsd != null ? amountIn * entryPriceUsd : amountIn;
-  const usdOut = exitPrice != null ? amountIn * exitPrice : amountOutNumber;
+  // P&L must be computed from two values in the SAME unit (issue #182). We never
+  // mix a USD-priced leg with a raw-token leg — that produced nonsense such as
+  // +$7.39 / +73.89% on a flat TON/USDT trade. Two unit-safe modes:
+  //   1. Price-based USD P&L — needs BOTH the entry and exit USD price of the
+  //      base (from_asset): pnl = base_amount * (exit_price - entry_price).
+  //   2. Raw same-unit diff — backward-compatible fallback when prices are
+  //      unavailable; only meaningful when amount_in and amount_out share a unit.
+  const priceBased = entryPriceUsd != null && exitPrice != null;
+  let pnl;
+  let pnlPercent;
+  if (priceBased) {
+    pnl = amountIn * (exitPrice - entryPriceUsd);
+    pnlPercent = entryPriceUsd > 0 ? ((exitPrice - entryPriceUsd) / entryPriceUsd) * 100 : 0;
+  } else {
+    pnl = amountOutNumber - amountIn;
+    pnlPercent = amountIn > 0 ? (pnl / amountIn) * 100 : 0;
+  }
 
-  const pnl = usdOut - usdIn;
-  const pnlPercent = usdIn > 0 ? (pnl / usdIn) * 100 : 0;
-
-  sdk.db
+  // Close atomically: the WHERE guard makes this a compare-and-swap so two
+  // concurrent record_trade / close calls can't both pass the in-memory
+  // status check and then each credit the simulation balance or double-count
+  // P&L for the same position (issue #182).
+  const closeUpdate = sdk.db
     .prepare(
       `UPDATE trade_journal
        SET amount_out = ?, exit_price_usd = ?, pnl = ?, pnl_percent = ?, status = 'closed', note = COALESCE(?, note)
-       WHERE id = ?`
+       WHERE id = ? AND status != 'closed'`
     )
     .run(amountOutNumber, exitPrice ?? null, pnl, pnlPercent, note ?? null, entry.id);
+
+  if (closeUpdate.changes !== 1) {
+    return { success: false, error: `Trade ${entry.id} is already closed` };
+  }
 
   if (entry.mode === "simulation" && entry.from_asset === "TON") {
     const simBalance = getSimBalance(sdk);
@@ -307,6 +402,158 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
       profit_or_loss: pnl >= 0 ? "profit" : "loss",
       mode: entry.mode,
       status: "closed",
+    },
+  };
+}
+
+// Core paper-trade swap: validate the virtual balance, deduct it (if selling
+// TON) and record an open 'simulation' trade with a unit-safe entry price.
+// Shared by ton_trading_simulate_trade and ton_trading_execute_scheduled_trade
+// so scheduled DCA orders record P&L exactly like a manual simulation.
+async function recordSimulatedSwap(sdk, { from_asset, to_asset, amount_in, expected_amount_out, note, entry_price_usd }) {
+  const simBalance = getSimBalance(sdk);
+  const minBalance = sdk.pluginConfig.minBalanceTON ?? 1;
+
+  if (from_asset === "TON" && simBalance < amount_in) {
+    return {
+      success: false,
+      error: `Insufficient simulation balance: ${simBalance} TON (need ${amount_in} TON)`,
+    };
+  }
+
+  if (from_asset === "TON" && simBalance - amount_in < minBalance) {
+    return {
+      success: false,
+      error: `Trade would bring simulation balance below minimum (${minBalance} TON)`,
+    };
+  }
+
+  // Update virtual balance: if selling TON, deduct it
+  if (from_asset === "TON") {
+    setSimBalance(sdk, simBalance - amount_in);
+  }
+
+  // Record the from_asset USD price at entry so closing P&L is unit-safe
+  // even when the agent omits entry_price_usd (root cause of issue #182).
+  const resolvedEntryPrice =
+    toFiniteNumber(entry_price_usd) ?? (await inferAssetPriceUsd(sdk, from_asset));
+
+  const tradeId = sdk.db
+    .prepare(
+      `INSERT INTO trade_journal
+       (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status, note)
+       VALUES (?, 'simulation', 'buy', ?, ?, ?, ?, ?, 'open', ?)`
+    )
+    .run(Date.now(), from_asset, to_asset, amount_in, expected_amount_out, resolvedEntryPrice ?? null, note ?? null)
+    .lastInsertRowid;
+
+  sdk.log.info(
+    `Simulated trade #${tradeId}: ${amount_in} ${from_asset} → ${expected_amount_out} ${to_asset}`
+  );
+
+  return {
+    success: true,
+    data: {
+      trade_id: tradeId,
+      mode: "simulation",
+      from_asset,
+      to_asset,
+      amount_in,
+      expected_amount_out,
+      entry_price_usd: resolvedEntryPrice ?? null,
+      new_simulation_balance: from_asset === "TON" ? simBalance - amount_in : simBalance,
+      status: "open",
+    },
+  };
+}
+
+// Core real DEX swap: spend real funds on-chain and record an open 'real' trade
+// with a unit-safe entry price. Shared by ton_trading_execute_swap and
+// ton_trading_execute_scheduled_trade. Returns { success:false } only for
+// pre-chain validation (no funds moved); a failure during/after the on-chain
+// swap is signalled by throwing so callers can avoid an unsafe auto-retry.
+// `context` is optional — when it carries a chatId a Telegram confirmation is sent.
+async function recordRealSwap(sdk, { from_asset, to_asset, amount, slippage, dex, entry_price_usd }, context) {
+  const walletAddress = sdk.ton.getAddress();
+  if (!walletAddress) {
+    return { success: false, error: "Wallet not initialized" };
+  }
+
+  const result = await sdk.ton.dex.swap({
+    fromAsset: from_asset,
+    toAsset: to_asset,
+    amount: parseFloat(amount),
+    slippage,
+    ...(dex ? { dex } : {}),
+  });
+
+  // Record the from_asset USD price at entry so closing P&L is unit-safe
+  // even when the agent omits entry_price_usd (issue #182).
+  const resolvedEntryPrice =
+    toFiniteNumber(entry_price_usd) ?? (await inferAssetPriceUsd(sdk, from_asset));
+
+  let tradeId;
+  try {
+    tradeId = sdk.db
+      .prepare(
+        `INSERT INTO trade_journal
+         (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status)
+         VALUES (?, 'real', 'buy', ?, ?, ?, ?, ?, 'open')`
+      )
+      .run(
+        Date.now(),
+        from_asset,
+        to_asset,
+        parseFloat(amount),
+        result?.expectedOutput ? parseFloat(result.expectedOutput) : null,
+        resolvedEntryPrice ?? null
+      )
+      .lastInsertRowid;
+  } catch (journalErr) {
+    // The on-chain swap has already moved real funds; a failure to record it
+    // must be loud so the operator can reconcile the position manually instead
+    // of the trade silently vanishing from the journal (issue #182).
+    sdk.log.error(
+      `CRITICAL: real swap executed on-chain (${amount} ${from_asset} → ${to_asset}` +
+        `${result?.dex ? ` via ${result.dex}` : ""}) but writing the trade journal FAILED: ` +
+        `${journalErr.message}. Funds moved WITHOUT a trade_journal record — reconcile manually.`
+    );
+    throw journalErr;
+  }
+
+  sdk.log.info(
+    `Swap executed #${tradeId}: ${amount} ${from_asset} → ${to_asset} via ${result?.dex ?? dex ?? "best"}`
+  );
+
+  if (context?.chatId != null) {
+    try {
+      await sdk.telegram.sendMessage(
+        context.chatId,
+        `Swap submitted: ${amount} ${from_asset} → ${to_asset}\nExpected output: ${result?.expectedOutput ?? "unknown"}\nTrade ID: ${tradeId}\nAllow ~30 seconds for on-chain confirmation.`
+      );
+    } catch (msgErr) {
+      if (msgErr.name === "PluginSDKError") {
+        sdk.log.warn(`Could not send confirmation message: ${msgErr.code}: ${msgErr.message}`);
+      } else {
+        sdk.log.warn(`Could not send confirmation message: ${msgErr.message}`);
+      }
+    }
+  }
+
+  return {
+    success: true,
+    data: {
+      trade_id: tradeId,
+      from_asset,
+      to_asset,
+      amount_in: amount,
+      entry_price_usd: resolvedEntryPrice ?? null,
+      expected_output: result?.expectedOutput ?? null,
+      min_output: result?.minOutput ?? null,
+      slippage,
+      dex: result?.dex ?? dex ?? "auto",
+      status: "open",
+      note: "Allow ~30 seconds for on-chain confirmation",
     },
   };
 }
@@ -342,22 +589,50 @@ async function closeOpenPosition(sdk, entry, params, context) {
   let closeDex = dex ?? null;
   let minOutput = null;
 
+  // Atomically claim the position before doing anything that moves funds or
+  // records a close. Both a retry and a concurrent close read entry.status as
+  // 'open' from the in-memory row, so without a compare-and-swap they would each
+  // fire a real reverse-swap against the same funds (issue #182). Only the
+  // caller that flips 'open' → 'closing' in the DB proceeds.
+  const claim = sdk.db
+    .prepare("UPDATE trade_journal SET status = 'closing' WHERE id = ? AND status = 'open'")
+    .run(entry.id);
+  if (claim.changes !== 1) {
+    return { success: false, error: `Trade ${entry.id} is already being closed or is not open` };
+  }
+  const releaseClaim = () =>
+    sdk.db
+      .prepare("UPDATE trade_journal SET status = 'open' WHERE id = ? AND status = 'closing'")
+      .run(entry.id);
+
   if (entry.mode === "simulation") {
-    if (entry.to_asset === entry.from_asset) {
-      closeAmountOut = closeAmount;
-      closeDex = "none";
-    } else {
-      const quote = await sdk.ton.dex.quote({
-        fromAsset: entry.to_asset,
-        toAsset: entry.from_asset,
-        amount: closeAmount,
-      });
-      closeAmountOut = getDexOutput(quote, dex);
-      closeDex = getDexName(quote, dex);
+    try {
+      if (entry.to_asset === entry.from_asset) {
+        closeAmountOut = closeAmount;
+        closeDex = "none";
+      } else {
+        const quote = await sdk.ton.dex.quote({
+          fromAsset: entry.to_asset,
+          toAsset: entry.from_asset,
+          amount: closeAmount,
+        });
+        closeAmountOut = getDexOutput(quote, dex);
+        closeDex = getDexName(quote, dex);
+      }
+    } catch (simErr) {
+      // No real funds moved in simulation — release the claim so the position
+      // can be closed again on a later retry.
+      releaseClaim();
+      throw simErr;
+    }
+    if (closeAmountOut == null) {
+      releaseClaim();
+      return { success: false, error: `Could not determine close output for trade ${entry.id}` };
     }
   } else {
     const walletAddress = sdk.ton.getAddress();
     if (!walletAddress) {
+      releaseClaim();
       return { success: false, error: "Wallet not initialized" };
     }
 
@@ -370,10 +645,35 @@ async function closeOpenPosition(sdk, entry, params, context) {
       return null;
     });
 
-    const swapResult = await sdk.ton.dex.swap(closeSwapParams);
+    // The reverse swap is the irreversible step. If it throws, the on-chain
+    // state is unknown (funds may or may not have moved), so the trade is left
+    // terminally 'close_failed' rather than released — an auto-retry could
+    // double-spend. A human reconciles from the journal (issue #182).
+    let swapResult;
+    try {
+      swapResult = await sdk.ton.dex.swap(closeSwapParams);
+    } catch (swapErr) {
+      sdk.db
+        .prepare("UPDATE trade_journal SET status = 'close_failed', note = COALESCE(?, note) WHERE id = ?")
+        .run(`close swap failed: ${String(swapErr.message).slice(0, 200)}`, entry.id);
+      throw swapErr;
+    }
+
     minOutput = toFiniteNumber(swapResult?.minOutput);
     closeAmountOut = getDexOutput(swapResult, dex) ?? getDexOutput(quote, dex) ?? minOutput;
     closeDex = getDexName(swapResult, dex);
+
+    if (closeAmountOut == null) {
+      // The swap executed but its output is unknown — terminal, never silently
+      // reopen a position whose funds were already spent.
+      sdk.db
+        .prepare("UPDATE trade_journal SET status = 'close_failed', note = COALESCE(?, note) WHERE id = ?")
+        .run("close swap output unknown — reconcile manually", entry.id);
+      return {
+        success: false,
+        error: `Could not determine close output for trade ${entry.id}; the reverse swap may have executed — reconcile manually`,
+      };
+    }
 
     try {
       await sdk.telegram.sendMessage(
@@ -387,10 +687,6 @@ async function closeOpenPosition(sdk, entry, params, context) {
         sdk.log.warn(`Could not send close confirmation message: ${msgErr.message}`);
       }
     }
-  }
-
-  if (closeAmountOut == null) {
-    return { success: false, error: `Could not determine close output for trade ${entry.id}` };
   }
 
   const closeResult = closeTradeJournalEntry(
@@ -670,55 +966,14 @@ export const tools = (sdk) => [
     execute: async (params, _context) => {
       const { from_asset, to_asset, amount_in, expected_amount_out, note, entry_price_usd } = params;
       try {
-        const simBalance = getSimBalance(sdk);
-        const minBalance = sdk.pluginConfig.minBalanceTON ?? 1;
-
-        if (from_asset === "TON" && simBalance < amount_in) {
-          return {
-            success: false,
-            error: `Insufficient simulation balance: ${simBalance} TON (need ${amount_in} TON)`,
-          };
-        }
-
-        if (from_asset === "TON" && simBalance - amount_in < minBalance) {
-          return {
-            success: false,
-            error: `Trade would bring simulation balance below minimum (${minBalance} TON)`,
-          };
-        }
-
-        // Update virtual balance: if selling TON, deduct it
-        if (from_asset === "TON") {
-          setSimBalance(sdk, simBalance - amount_in);
-        }
-
-        const tradeId = sdk.db
-          .prepare(
-            `INSERT INTO trade_journal
-             (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status, note)
-             VALUES (?, 'simulation', 'buy', ?, ?, ?, ?, ?, 'open', ?)`
-          )
-          .run(Date.now(), from_asset, to_asset, amount_in, expected_amount_out, entry_price_usd ?? null, note ?? null)
-          .lastInsertRowid;
-
-        sdk.log.info(
-          `Simulated trade #${tradeId}: ${amount_in} ${from_asset} → ${expected_amount_out} ${to_asset}`
-        );
-
-        return {
-          success: true,
-          data: {
-            trade_id: tradeId,
-            mode: "simulation",
-            from_asset,
-            to_asset,
-            amount_in,
-            expected_amount_out,
-            entry_price_usd: entry_price_usd ?? null,
-            new_simulation_balance: from_asset === "TON" ? simBalance - amount_in : simBalance,
-            status: "open",
-          },
-        };
+        return await recordSimulatedSwap(sdk, {
+          from_asset,
+          to_asset,
+          amount_in,
+          expected_amount_out,
+          note,
+          entry_price_usd,
+        });
       } catch (err) {
         sdk.log.error(`ton_trading_simulate_trade failed: ${err.message}`);
         return { success: false, error: String(err.message).slice(0, 500) };
@@ -777,67 +1032,11 @@ export const tools = (sdk) => [
       } = params;
 
       try {
-        const walletAddress = sdk.ton.getAddress();
-        if (!walletAddress) {
-          return { success: false, error: "Wallet not initialized" };
-        }
-
-        const result = await sdk.ton.dex.swap({
-          fromAsset: from_asset,
-          toAsset: to_asset,
-          amount: parseFloat(amount),
-          slippage,
-          ...(dex ? { dex } : {}),
-        });
-
-        const tradeId = sdk.db
-          .prepare(
-            `INSERT INTO trade_journal
-             (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status)
-             VALUES (?, 'real', 'buy', ?, ?, ?, ?, ?, 'open')`
-          )
-          .run(
-            Date.now(),
-            from_asset,
-            to_asset,
-            parseFloat(amount),
-            result?.expectedOutput ? parseFloat(result.expectedOutput) : null,
-            entry_price_usd ?? null
-          )
-          .lastInsertRowid;
-
-        sdk.log.info(
-          `Swap executed #${tradeId}: ${amount} ${from_asset} → ${to_asset} via ${result?.dex ?? dex ?? "best"}`
+        return await recordRealSwap(
+          sdk,
+          { from_asset, to_asset, amount, slippage, dex, entry_price_usd },
+          context
         );
-
-        try {
-          await sdk.telegram.sendMessage(
-            context.chatId,
-            `Swap submitted: ${amount} ${from_asset} → ${to_asset}\nExpected output: ${result?.expectedOutput ?? "unknown"}\nTrade ID: ${tradeId}\nAllow ~30 seconds for on-chain confirmation.`
-          );
-        } catch (msgErr) {
-          if (msgErr.name === "PluginSDKError") {
-            sdk.log.warn(`Could not send confirmation message: ${msgErr.code}: ${msgErr.message}`);
-          } else {
-            sdk.log.warn(`Could not send confirmation message: ${msgErr.message}`);
-          }
-        }
-
-        return {
-          success: true,
-          data: {
-            trade_id: tradeId,
-            from_asset,
-            to_asset,
-            amount_in: amount,
-            expected_output: result?.expectedOutput ?? null,
-            min_output: result?.minOutput ?? null,
-            slippage,
-            dex: result?.dex ?? dex ?? "auto",
-            status: "open",
-            note: "Allow ~30 seconds for on-chain confirmation",
-          },
-        };
       } catch (err) {
         sdk.log.error(`ton_trading_execute_swap failed: ${err.message}`);
         if (err.name === "PluginSDKError") {
@@ -891,7 +1090,15 @@ export const tools = (sdk) => [
           return { success: false, error: `Trade ${trade_id} is already closed` };
         }
 
-        const closeResult = closeTradeJournalEntry(sdk, entry, amount_out, exit_price_usd, note);
+        // Mirror close_position: infer the exit price (live TON price or $1 for
+        // stablecoins) when the entry price is known, so P&L stays unit-safe even
+        // if the agent forgets to pass exit_price_usd (issue #182).
+        const shouldUseExitPrice = exit_price_usd != null || entry.entry_price_usd != null;
+        const resolvedExitPrice = shouldUseExitPrice
+          ? await inferExitPriceUsd(sdk, entry.from_asset, exit_price_usd)
+          : null;
+
+        const closeResult = closeTradeJournalEntry(sdk, entry, amount_out, resolvedExitPrice, note);
         if (!closeResult.success) return closeResult;
 
         sdk.log.info(
@@ -1481,7 +1688,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_top_traders",
     description:
-      "Find top-performing trader wallets on TON by analysing on-chain DEX activity. Returns wallets ranked by win rate and profit over the specified period. Use to find wallets worth copying.",
+      "Find the most active, highest-volume trader wallets on TON by analysing recent on-chain DEX activity on trending pools. Returns wallets ranked by USD volume and trade count. NOTE: this surfaces activity and volume, not realized profitability — a single trades snapshot cannot establish win rate or PnL, so no win rate is reported.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -1494,23 +1701,16 @@ export const tools = (sdk) => [
         },
         min_trades: {
           type: "integer",
-          description: "Minimum number of trades to qualify (default 10)",
+          description: "Minimum number of observed trades to qualify (default 10)",
           minimum: 1,
-        },
-        min_win_rate: {
-          type: "number",
-          description: "Minimum win rate (0–1, e.g. 0.6 = 60%, default 0.55)",
-          minimum: 0,
-          maximum: 1,
         },
       },
     },
     execute: async (params, _context) => {
       const limit = params.limit ?? 10;
       const minTrades = params.min_trades ?? 10;
-      const minWinRate = params.min_win_rate ?? 0.55;
       try {
-        const cacheKey = `toptraders:${limit}:${minTrades}:${minWinRate}`;
+        const cacheKey = `toptraders:${limit}:${minTrades}`;
         const cached = sdk.storage.get(cacheKey);
         if (cached) return { success: true, data: cached };
 
@@ -1549,32 +1749,36 @@ export const tools = (sdk) => [
               const wallet = attr.tx_from_address ?? null;
               if (!wallet) continue;
 
-              const priceChange = parseFloat(attr.price_to_in_currency_token ?? 0) -
-                parseFloat(attr.price_from_in_currency_token ?? 0);
-              const isWin = priceChange > 0;
-
+              // A single trade cannot tell us whether the wallet *profited* — that
+              // needs a matched entry/exit valued in one unit. The old code subtracted
+              // the price of the "to" token from the price of the "from" token (two
+              // different assets, two different units) and called a positive result a
+              // "win"; that figure is meaningless (issue #182). We only aggregate
+              // genuinely same-unit signals: trade count, USD volume, and buy/sell mix.
               if (!walletStats.has(wallet)) {
-                walletStats.set(wallet, { wallet, trades: 0, wins: 0, total_volume_usd: 0 });
+                walletStats.set(wallet, { wallet, trades: 0, buys: 0, sells: 0, total_volume_usd: 0 });
               }
               const stats = walletStats.get(wallet);
               stats.trades += 1;
-              if (isWin) stats.wins += 1;
-              stats.total_volume_usd += parseFloat(attr.volume_in_usd ?? 0);
+              if (attr.kind === "buy") stats.buys += 1;
+              else if (attr.kind === "sell") stats.sells += 1;
+              stats.total_volume_usd += parseFloat(attr.volume_in_usd ?? 0) || 0;
             }
           })
         );
 
         const traders = Array.from(walletStats.values())
           .filter((w) => w.trades >= minTrades)
-          .map((w) => ({
-            ...w,
-            win_rate: parseFloat((w.wins / w.trades).toFixed(4)),
-          }))
-          .filter((w) => w.win_rate >= minWinRate)
-          .sort((a, b) => b.win_rate - a.win_rate)
+          .map((w) => ({ ...w, total_volume_usd: parseFloat(w.total_volume_usd.toFixed(2)) }))
+          .sort((a, b) => b.total_volume_usd - a.total_volume_usd || b.trades - a.trades)
           .slice(0, limit);
 
-        const data = { traders, fetched_at: Date.now() };
+        const data = {
+          traders,
+          ranked_by: "total_volume_usd",
+          note: "Wallets are ranked by observed trade count and USD volume on trending pools, not by profitability. A single trades snapshot cannot establish a win rate or realized PnL.",
+          fetched_at: Date.now(),
+        };
         sdk.storage.set(cacheKey, data, { ttl: 300_000 });
 
         return { success: true, data };
@@ -1589,7 +1793,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_trader_performance",
     description:
-      "Analyse the recent on-chain trading performance of a specific wallet: win rate, total PnL estimate, most-traded tokens, and active pools. Use before deciding to copy a trader.",
+      "Analyse a wallet's recent on-chain swap activity: swap count, buys vs sells, net TON flow (same-unit, not realized profit), and most-traded tokens. Use before deciding to copy a trader.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -1627,23 +1831,33 @@ export const tools = (sdk) => [
         const events = json?.events ?? [];
 
         let swaps = 0;
-        let wins = 0;
+        let buys = 0;
+        let sells = 0;
+        let tonSpent = 0;
+        let tonReceived = 0;
         const tokenFrequency = new Map();
 
         for (const event of events) {
           for (const action of (event.actions ?? [])) {
             if (action.type !== "JettonSwap") continue;
             swaps += 1;
-            const jetton = action.JettonSwap?.jetton_master_in?.address ?? null;
+            const swap = action.JettonSwap ?? {};
+            const jetton = swap.jetton_master_in?.address ?? swap.jetton_master_out?.address ?? null;
             if (jetton) tokenFrequency.set(jetton, (tokenFrequency.get(jetton) ?? 0) + 1);
-            // Heuristic win: received more value out than paid in (by token amounts)
-            const amtIn = parseFloat(action.JettonSwap?.amount_in ?? 0);
-            const amtOut = parseFloat(action.JettonSwap?.amount_out ?? 0);
-            if (amtOut > amtIn) wins += 1;
+            // The old "win" heuristic compared amount_in vs amount_out, but those count
+            // two *different* jettons (e.g. 1 TON in, 5,000,000 memecoin out) — comparing
+            // them is meaningless and always flagged a "win" (issue #182). ton_in and
+            // ton_out are both nanotons (one common unit), so we aggregate the TON leg
+            // instead: how much TON the wallet paid vs received across the window.
+            const tonIn = (Number(swap.ton_in ?? 0) || 0) / 1e9;   // TON the wallet paid
+            const tonOut = (Number(swap.ton_out ?? 0) || 0) / 1e9; // TON the wallet received
+            tonSpent += tonIn;
+            tonReceived += tonOut;
+            if (tonIn > 0) buys += 1;
+            else if (tonOut > 0) sells += 1;
           }
         }
 
-        const winRate = swaps > 0 ? parseFloat((wins / swaps).toFixed(4)) : null;
         const topTokens = Array.from(tokenFrequency.entries())
           .sort((a, b) => b[1] - a[1])
           .slice(0, 5)
@@ -1653,9 +1867,13 @@ export const tools = (sdk) => [
           wallet_address,
           analysed_events: events.length,
           total_swaps: swaps,
-          wins,
-          win_rate: winRate,
+          buys,
+          sells,
+          ton_spent: parseFloat(tonSpent.toFixed(4)),
+          ton_received: parseFloat(tonReceived.toFixed(4)),
+          net_ton_flow: parseFloat((tonReceived - tonSpent).toFixed(4)),
           top_tokens: topTokens,
+          note: "net_ton_flow is the net TON moved across the observed swaps, not realized profit — cost basis and open jetton inventory are not tracked.",
           fetched_at: Date.now(),
         };
 
@@ -2027,11 +2245,11 @@ export const tools = (sdk) => [
         const winRate = totalTrades > 0 ? wins / totalTrades : 0;
         const maxDrawdown = maxCapital > 0 ? ((maxCapital - minCapital) / maxCapital) * 100 : 0;
 
-        // Sharpe ratio (simplified, assuming risk-free rate = 0)
+        // Per-trade Sharpe ratio (risk-free rate = 0), sample stddev (n-1 divisor).
         let sharpe = null;
         if (returns.length > 1) {
           const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
+          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
           const stddev = Math.sqrt(variance);
           sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
         }
@@ -2115,16 +2333,41 @@ export const tools = (sdk) => [
           };
         }
 
-        const returns = trades.map((t) => (t.pnl_percent ?? 0) / 100);
+        // Only trades with a finite recorded P&L are real observations. Unscored
+        // rows (null pnl_percent) must not be coerced to 0 — that diluted the win
+        // rate and dragged drawdown/VaR toward zero (issue #182).
+        const returns = trades
+          .map((t) => toFiniteNumber(t.pnl_percent))
+          .filter((p) => p != null)
+          .map((p) => p / 100);
+
+        if (returns.length === 0) {
+          return {
+            success: true,
+            data: {
+              mode,
+              lookback_days,
+              note: "No closed trades with a recorded P&L in this period",
+              trades_analysed: trades.length,
+              scored_trades: 0,
+            },
+          };
+        }
 
         const sorted = [...returns].sort((a, b) => a - b);
         const varIndex = Math.floor((1 - confidence_level) * sorted.length);
         const var95 = sorted[varIndex] ?? sorted[0];
 
         const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
-        const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length;
-        const stddev = Math.sqrt(variance);
-        const sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
+        // Sample standard deviation (n-1 divisor) — the conventional basis for a
+        // Sharpe ratio over a sample of trade returns. This is a per-trade Sharpe
+        // (not annualised, since trade frequency is not tracked). Needs >= 2 trades.
+        let sharpe = null;
+        if (returns.length >= 2) {
+          const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+          const stddev = Math.sqrt(variance);
+          sharpe = stddev > 0 ? parseFloat((mean / stddev).toFixed(4)) : null;
+        }
 
         // Max drawdown
         let peak = 1;
@@ -2143,9 +2386,13 @@ export const tools = (sdk) => [
 
         const wins = returns.filter((r) => r > 0).length;
         const losses = returns.filter((r) => r < 0).length;
+        const breakeven = returns.filter((r) => r === 0).length;
+        const decisive = wins + losses;
         const avgWin = wins > 0 ? returns.filter((r) => r > 0).reduce((s, r) => s + r, 0) / wins : 0;
         const avgLoss = losses > 0 ? Math.abs(returns.filter((r) => r < 0).reduce((s, r) => s + r, 0) / losses) : 0;
         const profitFactor = avgLoss > 0 ? parseFloat((avgWin / avgLoss).toFixed(4)) : null;
+        // Win rate over decisive trades only (wins + losses); null when none.
+        const winRate = decisive > 0 ? wins / decisive : null;
 
         return {
           success: true,
@@ -2153,13 +2400,20 @@ export const tools = (sdk) => [
             mode,
             lookback_days,
             trades_analysed: trades.length,
-            win_rate: parseFloat((wins / trades.length).toFixed(4)),
+            scored_trades: returns.length,
+            win_count: wins,
+            loss_count: losses,
+            breakeven_count: breakeven,
+            win_rate: winRate != null ? parseFloat(winRate.toFixed(4)) : null,
             avg_win_percent: parseFloat((avgWin * 100).toFixed(2)),
             avg_loss_percent: parseFloat((avgLoss * 100).toFixed(2)),
             profit_factor: profitFactor,
             sharpe_ratio: sharpe,
             max_drawdown_percent: parseFloat((maxDrawdown * 100).toFixed(2)),
-            value_at_risk_percent: parseFloat((Math.abs(var95) * 100).toFixed(2)),
+            // VaR is a loss magnitude: report 0 when the percentile return is a
+            // gain (no historical loss at this confidence) instead of a phantom
+            // positive produced by Math.abs() on a winning sample (issue #182).
+            value_at_risk_percent: parseFloat((Math.max(0, -var95) * 100).toFixed(2)),
             confidence_level,
           },
         };
@@ -2430,13 +2684,20 @@ export const tools = (sdk) => [
             : 5;
         }
 
-        // Kelly Criterion: f* = W/L - (1-W)/W  where W=win_rate, L=loss_rate, b=avg_win/avg_loss
+        // Kelly Criterion: f* = W - (1-W)/b  where W=win_rate (fraction), b=avg_win/avg_loss (payoff ratio)
         const b = avgLossPct > 0 ? avgWinPct / avgLossPct : 1;
         const kellyFraction = winRate - (1 - winRate) / b;
         const halfKellyFraction = Math.max(0, kellyFraction / 2); // half-Kelly for safety
 
-        // Fixed-fraction: risk a fixed % of capital, sized so stop-loss = that % of capital
-        const fixedFractionSize = balance * (risk_percent / 100) / (stop_loss_percent / 100);
+        // Fixed-fraction: risk a fixed % of capital, sized so the stop-loss loss
+        // equals that % of capital. The raw formula can exceed the balance when the
+        // stop is tighter than the risk budget (e.g. risk 2% / stop 1% → 200% of
+        // balance). Spot TON trading is unleveraged, so a position can never exceed
+        // the wallet — clamp to the available balance so the figure is actionable
+        // and never recommends deploying more capital than exists (issue #182).
+        const rawFixedFractionSize = balance * (risk_percent / 100) / (stop_loss_percent / 100);
+        const fixedFractionSize = Math.min(balance, rawFixedFractionSize);
+        const fixedFractionCapped = rawFixedFractionSize > balance;
 
         return {
           success: true,
@@ -2451,6 +2712,9 @@ export const tools = (sdk) => [
             half_kelly_fraction: parseFloat(halfKellyFraction.toFixed(4)),
             kelly_position_size: parseFloat((balance * halfKellyFraction).toFixed(4)),
             fixed_fraction_position_size: parseFloat(fixedFractionSize.toFixed(4)),
+            // True when the raw fixed-fraction size was larger than the balance and
+            // got clamped — signals the stop is tight relative to the risk budget.
+            fixed_fraction_capped_by_balance: fixedFractionCapped,
             risk_percent,
             stop_loss_percent,
             recommendation: kellyFraction <= 0
@@ -2471,7 +2735,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_schedule_trade",
     description:
-      "Store a pending trade to be executed at a future time. The LLM should check scheduled trades on each run and execute any that are due. Returns the scheduled trade ID.",
+      "Store a pending trade to be executed at a future time. On each run, list due orders with ton_trading_get_scheduled_trades and fill each one with ton_trading_execute_scheduled_trade (which swaps and marks it executed atomically). Returns the scheduled trade ID.",
     category: "action",
     parameters: {
       type: "object",
@@ -2548,15 +2812,15 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_scheduled_trades",
     description:
-      "List pending scheduled trades. Returns all pending trades, highlighting those that are due now (execute_at <= current time). The LLM should execute due trades using ton_trading_execute_swap or ton_trading_simulate_trade.",
+      "List scheduled trades and flag which ones are due (execute_at <= now). Execute each due order with ton_trading_execute_scheduled_trade — it performs the swap AND advances the order's status atomically, so an order is never executed twice. Do NOT call ton_trading_execute_swap/ton_trading_simulate_trade directly for scheduled orders: that would leave them stuck 'pending' and risk re-execution.",
     category: "data-bearing",
     parameters: {
       type: "object",
       properties: {
         status: {
           type: "string",
-          description: 'Filter by status: "pending", "executed", "cancelled", or "all" (default "pending")',
-          enum: ["pending", "executed", "cancelled", "all"],
+          description: 'Filter by status: "pending", "executed", "cancelled", "failed", or "all" (default "pending")',
+          enum: ["pending", "executed", "cancelled", "failed", "all"],
         },
         limit: {
           type: "integer",
@@ -2593,12 +2857,180 @@ export const tools = (sdk) => [
             scheduled_trades: annotated,
             due_now: dueTrades.length,
             note: dueTrades.length > 0
-              ? `${dueTrades.length} trade(s) are due — execute them using ton_trading_execute_swap or ton_trading_simulate_trade`
+              ? `${dueTrades.length} trade(s) are due — execute each with ton_trading_execute_scheduled_trade (pass its schedule id) so the order is filled and marked executed atomically`
               : null,
           },
         };
       } catch (err) {
         sdk.log.error(`ton_trading_get_scheduled_trades failed: ${err.message}`);
+        return { success: false, error: String(err.message).slice(0, 500) };
+      }
+    },
+  },
+
+  // ── Tool 23b: ton_trading_execute_scheduled_trade ──────────────────────────
+  {
+    name: "ton_trading_execute_scheduled_trade",
+    description:
+      "Execute a single due scheduled trade by its id and atomically mark it 'executed'. This is the correct way to fill DCA/grid orders from ton_trading_get_scheduled_trades: it claims the order with a compare-and-swap before swapping, so a due order can never be executed twice (the root cause of orders stuck 'pending' and double-spent in issue #182). Only available in direct messages because it can spend real funds.",
+    category: "action",
+    scope: "dm-only",
+    parameters: {
+      type: "object",
+      properties: {
+        schedule_id: {
+          type: "integer",
+          description: "Id of the pending scheduled trade to execute (from ton_trading_get_scheduled_trades)",
+        },
+        expected_amount_out: {
+          type: "number",
+          description: "Expected output amount from a fresh quote (ton_trading_get_market_data). Required for simulation orders; ignored for real orders where the DEX computes the output.",
+        },
+        entry_price_usd: {
+          type: "number",
+          description: "USD price of the from_asset at execution. Recorded for unit-safe P&L; auto-inferred for TON and stablecoins when omitted.",
+        },
+        slippage: {
+          type: "number",
+          description: "Slippage tolerance for real orders (e.g. 0.05 for 5%). Defaults to plugin config.",
+          minimum: 0.001,
+          maximum: 0.5,
+        },
+        dex: {
+          type: "string",
+          description: 'Preferred DEX for real orders: "stonfi", "dedust", or omit for best quote',
+          enum: ["stonfi", "dedust"],
+        },
+        force: {
+          type: "boolean",
+          description: "Execute even if the order is not due yet (execute_at is in the future). Default false.",
+        },
+      },
+      required: ["schedule_id"],
+    },
+    execute: async (params, context) => {
+      const { schedule_id, expected_amount_out, entry_price_usd, slippage, dex, force = false } = params;
+      try {
+        if (schedule_id == null) {
+          return { success: false, error: "schedule_id is required" };
+        }
+
+        const row = sdk.db.prepare("SELECT * FROM scheduled_trades WHERE id = ?").get(schedule_id);
+        if (!row) {
+          return { success: false, error: `Scheduled trade ${schedule_id} not found` };
+        }
+        if (row.status !== "pending") {
+          // Idempotent guard: an already-executed/cancelled/failed order must not
+          // run again. This is what stops the double-execution reported in #182.
+          return {
+            success: false,
+            error: `Scheduled trade ${schedule_id} is already ${row.status} — nothing to execute`,
+            data: { schedule_id, status: row.status },
+          };
+        }
+
+        const now = Date.now();
+        if (!force && row.execute_at > now) {
+          return {
+            success: false,
+            error: `Scheduled trade ${schedule_id} is not due yet (due in ${row.execute_at - now} ms). Pass force:true to execute it early.`,
+            data: { schedule_id, due_in_ms: row.execute_at - now },
+          };
+        }
+
+        if (row.mode !== "real" && toFiniteNumber(expected_amount_out) == null) {
+          return {
+            success: false,
+            error: "expected_amount_out is required to execute a simulation order — fetch a fresh quote with ton_trading_get_market_data first",
+          };
+        }
+
+        // Atomic claim: flip pending → executed only if it is still pending. If a
+        // concurrent poll already claimed it, changes === 0 and we bail out, so
+        // the swap below runs at most once per order.
+        const claim = sdk.db
+          .prepare("UPDATE scheduled_trades SET status = 'executed' WHERE id = ? AND status = 'pending'")
+          .run(schedule_id);
+        if (claim.changes !== 1) {
+          return {
+            success: false,
+            error: `Scheduled trade ${schedule_id} was already claimed by another run`,
+          };
+        }
+
+        let swapResult;
+        try {
+          if (row.mode === "real") {
+            swapResult = await recordRealSwap(
+              sdk,
+              {
+                from_asset: row.from_asset,
+                to_asset: row.to_asset,
+                amount: String(row.amount),
+                slippage: toFiniteNumber(slippage) ?? sdk.pluginConfig.defaultSlippage ?? 0.05,
+                dex,
+                entry_price_usd,
+              },
+              context
+            );
+          } else {
+            swapResult = await recordSimulatedSwap(sdk, {
+              from_asset: row.from_asset,
+              to_asset: row.to_asset,
+              amount_in: row.amount,
+              expected_amount_out,
+              note: row.note,
+              entry_price_usd,
+            });
+          }
+        } catch (swapErr) {
+          // The swap threw. For real orders the on-chain state is unknown, so we
+          // park the order in a terminal 'failed' state rather than 'pending' —
+          // re-running could double-spend. Simulation is safe to retry, so we
+          // release it back to 'pending'.
+          const releaseStatus = row.mode === "real" ? "failed" : "pending";
+          sdk.db
+            .prepare("UPDATE scheduled_trades SET status = ? WHERE id = ? AND status = 'executed'")
+            .run(releaseStatus, schedule_id);
+          throw swapErr;
+        }
+
+        if (!swapResult || swapResult.success !== true) {
+          // Pre-chain validation rejected the swap (no funds moved) — release the
+          // claim so the order can be retried once the condition is resolved.
+          sdk.db
+            .prepare("UPDATE scheduled_trades SET status = 'pending' WHERE id = ? AND status = 'executed'")
+            .run(schedule_id);
+          return swapResult ?? { success: false, error: "Swap returned no result" };
+        }
+
+        // Success — link the journal trade to the schedule row for auditing.
+        const tradeId = swapResult.data?.trade_id ?? null;
+        if (tradeId != null) {
+          try {
+            sdk.db.prepare("UPDATE scheduled_trades SET trade_id = ? WHERE id = ?").run(tradeId, schedule_id);
+          } catch {
+            // Legacy DB without the trade_id column — linkage is best-effort.
+          }
+        }
+
+        sdk.log.info(`Executed scheduled trade #${schedule_id} → journal trade #${tradeId ?? "?"}`);
+
+        return {
+          success: true,
+          data: {
+            schedule_id,
+            status: "executed",
+            mode: row.mode,
+            trade_id: tradeId,
+            trade: swapResult.data,
+          },
+        };
+      } catch (err) {
+        sdk.log.error(`ton_trading_execute_scheduled_trade failed: ${err.message}`);
+        if (err.name === "PluginSDKError") {
+          return { success: false, error: `${err.code}: ${String(err.message).slice(0, 500)}` };
+        }
         return { success: false, error: String(err.message).slice(0, 500) };
       }
     },
@@ -2830,7 +3262,7 @@ export const tools = (sdk) => [
       },
       required: ["from_asset", "to_asset", "amount"],
     },
-    execute: async (params, _context) => {
+    execute: async (params, context) => {
       const {
         from_asset, to_asset, amount, mode = "simulation",
         trigger_price_below, trigger_price_above,
@@ -2851,6 +3283,13 @@ export const tools = (sdk) => [
         const currentPrice = dexQuote?.recommended
           ? parseFloat(dexQuote[dexQuote.recommended]?.output ?? dexQuote[dexQuote.recommended]?.price ?? 0) / amount
           : (tonPrice?.usd ?? null);
+
+        // Entry price must be the from_asset USD price (not always TON) so P&L is
+        // unit-safe; unknown jettons stay null rather than borrowing TON's price.
+        const resolvedEntryPriceUsd =
+          from_asset === "TON"
+            ? toFiniteNumber(tonPrice?.usd)
+            : (isStablecoin(from_asset) ? 1 : null);
 
         const conditions = [];
         let allMet = true;
@@ -2884,93 +3323,86 @@ export const tools = (sdk) => [
           };
         }
 
-        // ── Risk validation (same rules as ton_trading_validate_trade) ──────────
+        // ── Risk cap ────────────────────────────────────────────────────────────
+        // The %-of-balance cap and minimum-reserve checks are denominated in TON,
+        // so they apply when selling TON (in both modes). A jetton amount is not
+        // directly comparable to the TON balance, so a TON sell is the only case
+        // the cap can evaluate; non-TON real sells are still guarded downstream by
+        // recordRealSwap (wallet-initialized check + on-chain slippage). Before
+        // this, the checks were silently skipped for every non-TON asset and, in
+        // real mode, the post-trade reserve check was missing entirely (issue #182).
         const maxTradePercent = sdk.pluginConfig.maxTradePercent ?? 10;
         const minBalanceTON = sdk.pluginConfig.minBalanceTON ?? 1;
 
-        if (mode === "simulation" && from_asset === "TON") {
-          const simBalance = getSimBalance(sdk);
-          const maxAllowed = simBalance * (maxTradePercent / 100);
-          if (simBalance < minBalanceTON) {
+        if (from_asset === "TON") {
+          const isReal = mode === "real";
+          const balance = isReal
+            ? parseFloat((await sdk.ton.getBalance())?.balance ?? "0")
+            : getSimBalance(sdk);
+          const label = isReal ? "Wallet" : "Simulation";
+          const noun = isReal ? "balance" : "simulation balance";
+          const maxAllowed = balance * (maxTradePercent / 100);
+          if (balance < minBalanceTON) {
             return {
               success: false,
-              error: `Simulation balance (${simBalance} TON) is below minimum (${minBalanceTON} TON)`,
+              error: `${label} balance (${balance} TON) is below minimum (${minBalanceTON} TON)`,
             };
           }
           if (amount > maxAllowed) {
             return {
               success: false,
-              error: `Amount ${amount} TON exceeds ${maxTradePercent}% of simulation balance (max ${maxAllowed.toFixed(4)} TON)`,
+              error: `Amount ${amount} TON exceeds ${maxTradePercent}% of ${noun} (max ${maxAllowed.toFixed(4)} TON)`,
             };
           }
-          if (simBalance - amount < minBalanceTON) {
+          if (balance - amount < minBalanceTON) {
             return {
               success: false,
-              error: `Trade would bring simulation balance below minimum (${minBalanceTON} TON)`,
-            };
-          }
-        } else if (mode === "real" && from_asset === "TON") {
-          const realBalance = parseFloat((await sdk.ton.getBalance())?.balance ?? "0");
-          const maxAllowed = realBalance * (maxTradePercent / 100);
-          if (realBalance < minBalanceTON) {
-            return {
-              success: false,
-              error: `Wallet balance (${realBalance} TON) is below minimum (${minBalanceTON} TON)`,
-            };
-          }
-          if (amount > maxAllowed) {
-            return {
-              success: false,
-              error: `Amount ${amount} TON exceeds ${maxTradePercent}% of balance (max ${maxAllowed.toFixed(4)} TON)`,
+              error: `Trade would bring ${noun} below minimum (${minBalanceTON} TON)`,
             };
           }
         }
 
-        // Execute the trade
-        let tradeResult;
-        if (mode === "simulation") {
-          const expectedOut = dexQuote?.recommended
-            ? parseFloat(dexQuote[dexQuote.recommended]?.output ?? dexQuote[dexQuote.recommended]?.price ?? 0)
-            : amount;
+        // ── Execute via the shared helpers so auto_execute, execute_swap and
+        //    execute_scheduled_trade share identical swap + journal semantics:
+        //    the wallet-initialized check, a unit-safe inferred entry price, and
+        //    (real) the throw-on-post-chain-failure contract that prevents an
+        //    unsafe auto-retry. Previously this path re-implemented the swap and
+        //    INSERT inline, so non-TON real sells skipped the wallet check and
+        //    the entry-price inference drifted from the rest of the plugin. ──
+        const expectedOut = dexQuote?.recommended
+          ? parseFloat(dexQuote[dexQuote.recommended]?.output ?? dexQuote[dexQuote.recommended]?.price ?? 0)
+          : amount;
 
-          const tradeId = sdk.db
-            .prepare(
-              `INSERT INTO trade_journal
-               (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status, note)
-               VALUES (?, 'simulation', 'buy', ?, ?, ?, ?, ?, 'open', 'auto_execute')`
-            )
-            .run(Date.now(), from_asset, to_asset, amount, expectedOut, tonPrice?.usd ?? null, null)
-            .lastInsertRowid;
+        const swapResult =
+          mode === "simulation"
+            ? await recordSimulatedSwap(sdk, {
+                from_asset,
+                to_asset,
+                amount_in: amount,
+                expected_amount_out: expectedOut,
+                note: "auto_execute",
+                entry_price_usd: resolvedEntryPriceUsd,
+              })
+            : await recordRealSwap(
+                sdk,
+                { from_asset, to_asset, amount, slippage, entry_price_usd: resolvedEntryPriceUsd },
+                context
+              );
 
-          if (from_asset === "TON") {
-            const simBalance = getSimBalance(sdk);
-            setSimBalance(sdk, simBalance - amount);
-          }
-
-          tradeResult = { trade_id: tradeId, mode: "simulation", from_asset, to_asset, amount_in: amount };
-        } else {
-          const swapResult = await sdk.ton.dex.swap({
-            fromAsset: from_asset,
-            toAsset: to_asset,
-            amount,
-            slippage,
-          });
-
-          const tradeId = sdk.db
-            .prepare(
-              `INSERT INTO trade_journal
-               (timestamp, mode, action, from_asset, to_asset, amount_in, amount_out, entry_price_usd, status)
-               VALUES (?, 'real', 'buy', ?, ?, ?, ?, ?, 'open')`
-            )
-            .run(
-              Date.now(), from_asset, to_asset, amount,
-              swapResult?.expectedOutput ? parseFloat(swapResult.expectedOutput) : null,
-              tonPrice?.usd ?? null
-            )
-            .lastInsertRowid;
-
-          tradeResult = { trade_id: tradeId, mode: "real", from_asset, to_asset, amount_in: amount, dex: swapResult?.dex };
+        // Propagate a pre-chain validation failure (insufficient balance, wallet
+        // not initialized) verbatim, without registering any risk-management rule.
+        if (!swapResult.success) {
+          return swapResult;
         }
+
+        const tradeResult = {
+          trade_id: swapResult.data.trade_id,
+          mode,
+          from_asset,
+          to_asset,
+          amount_in: amount,
+          ...(mode === "real" ? { dex: swapResult.data.dex } : {}),
+        };
 
         // Register automatic risk management rules if requested
         const rules = [];
@@ -3044,12 +3476,75 @@ export const tools = (sdk) => [
 
         // Calculate portfolio metrics
         const totalOpenPositions = openTrades.length;
-        const totalExposureTon = openTrades.reduce((sum, t) => sum + (t.from_asset === "TON" ? (t.amount_in ?? 0) : 0), 0);
 
-        const realizedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
-        const winCount = closedTrades.filter((t) => (t.pnl ?? 0) > 0).length;
-        const lossCount = closedTrades.filter((t) => (t.pnl ?? 0) < 0).length;
-        const winRate = closedTrades.length > 0 ? winCount / closedTrades.length : null;
+        // Per-position unrealized P&L and TON exposure, all bridged through USD so
+        // the figures are unit-safe (issue #182). A position is valued only when
+        // both its entry price (USD cost basis of the funding asset) and the held
+        // asset's current USD price are known; otherwise it is reported as unvalued
+        // rather than mixing incompatible units. Held-asset prices follow the same
+        // rules as inferAssetPriceUsd (TON via the live feed, stablecoins = $1,
+        // arbitrary jettons = unknown) and reuse the already-fetched TON price so
+        // no extra network calls are made.
+        const priceUsdFor = (asset) =>
+          asset === "TON" ? tonPriceUsd : (isStablecoin(asset) ? 1 : null);
+
+        let unrealizedPnlUsd = 0;
+        let valuedPositions = 0;
+        let totalExposureTon = 0;
+        let exposureComplete = true;
+
+        const openTradesDetail = openTrades.map((t) => {
+          const amountIn = toFiniteNumber(t.amount_in);
+          const amountOut = toFiniteNumber(t.amount_out);
+          const entryPriceUsd = toFiniteNumber(t.entry_price_usd);
+          const currentPriceUsd = priceUsdFor(t.to_asset);
+
+          const costBasisUsd =
+            entryPriceUsd != null && amountIn != null ? amountIn * entryPriceUsd : null;
+          const currentValueUsd =
+            currentPriceUsd != null && amountOut != null ? amountOut * currentPriceUsd : null;
+
+          let posUnrealizedUsd = null;
+          let posUnrealizedPct = null;
+          if (costBasisUsd != null && currentValueUsd != null) {
+            posUnrealizedUsd = currentValueUsd - costBasisUsd;
+            posUnrealizedPct = costBasisUsd !== 0 ? (posUnrealizedUsd / costBasisUsd) * 100 : null;
+            unrealizedPnlUsd += posUnrealizedUsd;
+            valuedPositions += 1;
+          }
+
+          // TON exposure = capital deployed, expressed in TON. TON-funded legs use
+          // their raw amount (robust even if the TON price feed is down); other
+          // legs bridge their USD cost basis through the TON price when available.
+          // Previously only TON-funded positions counted, understating exposure.
+          if (t.from_asset === "TON") {
+            if (amountIn != null) totalExposureTon += amountIn;
+            else exposureComplete = false;
+          } else if (costBasisUsd != null && tonPriceUsd) {
+            totalExposureTon += costBasisUsd / tonPriceUsd;
+          } else {
+            exposureComplete = false;
+          }
+
+          return {
+            trade_id: t.id,
+            mode: t.mode,
+            from_asset: t.from_asset,
+            to_asset: t.to_asset,
+            amount_in: t.amount_in,
+            amount_out: t.amount_out ?? null,
+            entry_price_usd: t.entry_price_usd,
+            current_price_usd: currentPriceUsd,
+            cost_basis_usd: costBasisUsd != null ? parseFloat(costBasisUsd.toFixed(4)) : null,
+            current_value_usd: currentValueUsd != null ? parseFloat(currentValueUsd.toFixed(4)) : null,
+            unrealized_pnl_usd: posUnrealizedUsd != null ? parseFloat(posUnrealizedUsd.toFixed(4)) : null,
+            unrealized_pnl_percent: posUnrealizedPct != null ? parseFloat(posUnrealizedPct.toFixed(4)) : null,
+            opened_at: t.timestamp,
+          };
+        });
+
+        const stats = summarizeClosedPnl(closedTrades);
+        const realizedPnl = stats.realizedPnl;
 
         const simBalance = getSimBalance(sdk);
         const realBalance = await sdk.ton.getBalance().catch(() => null);
@@ -3063,20 +3558,28 @@ export const tools = (sdk) => [
             ton_price_usd: tonPriceUsd,
             open_positions: totalOpenPositions,
             total_exposure_ton: parseFloat(totalExposureTon.toFixed(4)),
+            // True when every open position could be expressed in TON; false when
+            // at least one position's funding asset has no known USD price, so the
+            // exposure figure is a lower bound rather than the full total.
+            exposure_complete: exposureComplete,
+            // Sum of unrealized P&L over positions that could be valued (null when
+            // none could be). valued/unvalued counts make the coverage explicit so
+            // the figure is never silently understated (issue #182).
+            unrealized_pnl_usd: valuedPositions > 0 ? parseFloat(unrealizedPnlUsd.toFixed(4)) : null,
+            valued_open_positions: valuedPositions,
+            unvalued_open_positions: totalOpenPositions - valuedPositions,
             realized_pnl_usd: parseFloat(realizedPnl.toFixed(4)),
-            total_closed_trades: closedTrades.length,
-            win_count: winCount,
-            loss_count: lossCount,
-            win_rate: winRate != null ? parseFloat(winRate.toFixed(4)) : null,
-            open_trades: openTrades.map((t) => ({
-              trade_id: t.id,
-              mode: t.mode,
-              from_asset: t.from_asset,
-              to_asset: t.to_asset,
-              amount_in: t.amount_in,
-              entry_price_usd: t.entry_price_usd,
-              opened_at: t.timestamp,
-            })),
+            total_closed_trades: stats.total,
+            win_count: stats.win,
+            loss_count: stats.loss,
+            // breakeven (pnl == 0) and unscored (pnl never recorded) trades are
+            // surfaced so the books always reconcile: win + loss + breakeven +
+            // unscored === total_closed_trades (issue #182).
+            breakeven_count: stats.breakeven,
+            unscored_count: stats.unscored,
+            // Win rate over decisive trades only (wins + losses); null when none.
+            win_rate: stats.winRate != null ? parseFloat(stats.winRate.toFixed(4)) : null,
+            open_trades: openTradesDetail,
           },
         };
       } catch (err) {
@@ -3279,14 +3782,19 @@ export const tools = (sdk) => [
         }
 
         const json = await res.json();
-        const ohlcv = (json?.data?.attributes?.ohlcv_list ?? []).map(([ts, o, h, l, c, v]) => ({
-          timestamp: ts * 1000,
-          open: parseFloat(o),
-          high: parseFloat(h),
-          low: parseFloat(l),
-          close: parseFloat(c),
-          volume: parseFloat(v),
-        }));
+        // GeckoTerminal returns ohlcv_list newest-first (descending timestamp).
+        // Sort ascending so closes[last] is the most recent candle — otherwise
+        // RSI/MACD gains/losses are time-reversed and current_price is stale.
+        const ohlcv = (json?.data?.attributes?.ohlcv_list ?? [])
+          .map(([ts, o, h, l, c, v]) => ({
+            timestamp: ts * 1000,
+            open: parseFloat(o),
+            high: parseFloat(h),
+            low: parseFloat(l),
+            close: parseFloat(c),
+            volume: parseFloat(v),
+          }))
+          .sort((a, b) => a.timestamp - b.timestamp);
 
         if (ohlcv.length < periods) {
           return { success: false, error: `Not enough price data: need ${periods} candles, got ${ohlcv.length}` };
@@ -3309,18 +3817,23 @@ export const tools = (sdk) => [
         const rsi = parseFloat((100 - 100 / (1 + rs)).toFixed(2));
 
         // ── MACD (Moving Average Convergence Divergence) ───────────────────
-        function ema(data, n) {
+        // EMA as a running series so the signal line can be the 9-period EMA of
+        // the MACD line itself (its definition) rather than of raw prices.
+        function emaSeries(data, n) {
           const k = 2 / (n + 1);
-          let emaVal = data[0];
+          const out = [data[0]];
           for (let i = 1; i < data.length; i++) {
-            emaVal = data[i] * k + emaVal * (1 - k);
+            out.push(data[i] * k + out[i - 1] * (1 - k));
           }
-          return emaVal;
+          return out;
         }
-        const ema12 = ema(closes, 12);
-        const ema26 = ema(closes, 26);
-        const macdLine = parseFloat((ema12 - ema26).toFixed(6));
-        const signalLine = parseFloat(ema(closes.slice(-9), 9).toFixed(6));
+        const ema12Series = emaSeries(closes, 12);
+        const ema26Series = emaSeries(closes, 26);
+        const macdSeries = closes.map((_, i) => ema12Series[i] - ema26Series[i]);
+        const macdLine = parseFloat(macdSeries[macdSeries.length - 1].toFixed(6));
+        // Signal line = 9-period EMA of the MACD line series (not of prices).
+        const signalSeriesVals = emaSeries(macdSeries, 9);
+        const signalLine = parseFloat(signalSeriesVals[signalSeriesVals.length - 1].toFixed(6));
         const macdHistogram = parseFloat((macdLine - signalLine).toFixed(6));
 
         // ── Bollinger Bands ────────────────────────────────────────────────
@@ -3366,7 +3879,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_get_order_book_depth",
     description:
-      "Analyse order book depth and liquidity for a token pair. Returns bid/ask spread, depth at various price levels, and estimated price impact for a given trade size. Use before large trades to assess slippage risk.",
+      "Analyse synthetic order-book depth and liquidity for a token pair by probing DEX quotes at increasing fill sizes. Returns depth at various sizes, the price spread across fill sizes, and estimated price impact for a given trade size. Use before large trades to assess slippage risk. Quotes are one-directional, so this measures depth/price-impact, not a true bid/ask spread.",
     category: "data-bearing",
     parameters: {
       type: "object",
@@ -3410,15 +3923,19 @@ export const tools = (sdk) => [
           return { amount_in: amt, amount_out: output, effective_price: effectivePrice };
         }).filter(Boolean);
 
-        // Calculate spread and price impact
-        let bidAskSpread = null;
+        // Effective price moves as fill size grows because larger fills walk the
+        // pool's curve. We only quote ONE direction (from_asset → to_asset), so this
+        // is NOT a real bid/ask spread (that needs opposing buy and sell quotes at
+        // the same size). Report it honestly as the price spread across fill sizes —
+        // the gap between the smallest and largest probe (issue #182).
+        let priceSpreadAcrossSizes = null;
         let priceImpactPercent = null;
 
         if (depthLevels.length >= 2) {
           const basePrice = depthLevels[0]?.effective_price;
           const largePrice = depthLevels[depthLevels.length - 1]?.effective_price;
           if (basePrice && largePrice) {
-            bidAskSpread = parseFloat(Math.abs(basePrice - largePrice).toFixed(6));
+            priceSpreadAcrossSizes = parseFloat(Math.abs(basePrice - largePrice).toFixed(6));
             priceImpactPercent = parseFloat(((Math.abs(basePrice - largePrice) / basePrice) * 100).toFixed(4));
           }
         }
@@ -3450,7 +3967,7 @@ export const tools = (sdk) => [
           from_asset,
           to_asset,
           depth_levels: depthLevels,
-          bid_ask_spread: bidAskSpread,
+          price_spread_across_sizes: priceSpreadAcrossSizes,
           price_impact_percent_large: priceImpactPercent,
           custom_trade_impact: customTradeImpact,
           liquidity_rating: priceImpactPercent == null ? null :
@@ -3473,7 +3990,7 @@ export const tools = (sdk) => [
   {
     name: "ton_trading_create_schedule",
     description:
-      "Create a recurring trading schedule for strategies like dollar-cost averaging (DCA) or grid trading. Stores multiple pending trades at calculated intervals. Use ton_trading_get_scheduled_trades to check and execute due trades.",
+      "Create a recurring trading schedule for strategies like dollar-cost averaging (DCA) or grid trading. Stores multiple pending trades at calculated intervals. List due orders with ton_trading_get_scheduled_trades and fill each with ton_trading_execute_scheduled_trade, which swaps and marks the order executed atomically (no double-execution).",
     category: "action",
     parameters: {
       type: "object",
@@ -3562,7 +4079,7 @@ export const tools = (sdk) => [
             num_orders_created: scheduledIds.length,
             total_amount: parseFloat((amount_per_trade * num_orders).toFixed(4)),
             schedule: scheduledIds,
-            note: `${num_orders} orders scheduled. Check and execute due ones with ton_trading_get_scheduled_trades.`,
+            note: `${num_orders} orders scheduled. List due ones with ton_trading_get_scheduled_trades, then fill each with ton_trading_execute_scheduled_trade.`,
           },
         };
       } catch (err) {
@@ -3692,18 +4209,18 @@ export const tools = (sdk) => [
           };
         }
 
-        const totalPnl = trades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-        const wins = trades.filter((t) => (t.pnl ?? 0) > 0);
-        const losses = trades.filter((t) => (t.pnl ?? 0) < 0);
-        const winRate = trades.length > 0 ? wins.length / trades.length : 0;
+        // Same unit-safe classifier as the portfolio summary so the books
+        // reconcile and unscored (null-pnl) trades never dilute the averages.
+        const stats = summarizeClosedPnl(trades);
+        const totalPnl = stats.realizedPnl;
+        const avgWin = stats.avgWin;
+        const avgLoss = stats.avgLoss;
 
-        const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + (t.pnl ?? 0), 0) / wins.length : 0;
-        const avgLoss = losses.length > 0 ? losses.reduce((s, t) => s + (t.pnl ?? 0), 0) / losses.length : 0;
+        const bestTrade = trades.reduce((best, t) => (toFiniteNumber(t.pnl) ?? 0) > (toFiniteNumber(best.pnl) ?? 0) ? t : best, trades[0]);
+        const worstTrade = trades.reduce((worst, t) => (toFiniteNumber(t.pnl) ?? 0) < (toFiniteNumber(worst.pnl) ?? 0) ? t : worst, trades[0]);
 
-        const bestTrade = trades.reduce((best, t) => (t.pnl ?? 0) > (best.pnl ?? 0) ? t : best, trades[0]);
-        const worstTrade = trades.reduce((worst, t) => (t.pnl ?? 0) < (worst.pnl ?? 0) ? t : worst, trades[0]);
-
-        const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : null;
+        // Profit factor = gross profit / gross loss (both over decisive trades).
+        const profitFactor = stats.grossLoss !== 0 ? Math.abs(stats.grossProfit / stats.grossLoss) : null;
 
         // Daily P&L breakdown
         const dailyPnl = {};
@@ -3717,11 +4234,13 @@ export const tools = (sdk) => [
           data: {
             mode,
             period_days: days,
-            total_trades: trades.length,
+            total_trades: stats.total,
             open_positions: openTrades?.count ?? 0,
-            win_count: wins.length,
-            loss_count: losses.length,
-            win_rate: parseFloat(winRate.toFixed(4)),
+            win_count: stats.win,
+            loss_count: stats.loss,
+            breakeven_count: stats.breakeven,
+            unscored_count: stats.unscored,
+            win_rate: stats.winRate != null ? parseFloat(stats.winRate.toFixed(4)) : null,
             total_pnl_usd: parseFloat(totalPnl.toFixed(4)),
             avg_win_usd: parseFloat(avgWin.toFixed(4)),
             avg_loss_usd: parseFloat(avgLoss.toFixed(4)),

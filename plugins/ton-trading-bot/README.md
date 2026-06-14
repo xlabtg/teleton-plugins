@@ -24,7 +24,7 @@ Each tool does exactly one thing. The LLM composes them:
  8. ton_trading_get_token_listings           → fetch recently listed tokens for sniping
  9. ton_trading_get_token_info               → detailed token price, market cap, holders
 10. ton_trading_validate_token               → safety-check a token before sniping
-11. ton_trading_get_top_traders              → find top-performing wallets for copy trading
+11. ton_trading_get_top_traders              → find the most active, highest-volume wallets
 12. ton_trading_get_trader_performance       → analyse on-chain performance of a wallet
 13. ton_trading_get_active_pools             → list active liquidity pools by volume
 14. ton_trading_get_farms_with_apy           → list yield farming opportunities with APY
@@ -35,26 +35,27 @@ Each tool does exactly one thing. The LLM composes them:
 19. ton_trading_check_stop_loss              → query active rules and detect triggered ones
 20. ton_trading_get_optimal_position_size    → Kelly Criterion and fixed-fraction sizing
 21. ton_trading_schedule_trade               → store a pending trade for future execution
-22. ton_trading_get_scheduled_trades         → list pending scheduled trades
-23. ton_trading_reset_simulation_balance     → reset virtual balance to starting amount
-24. ton_trading_set_simulation_balance       → manually set the virtual balance
-25. ton_trading_set_take_profit              → standalone take-profit with optional trailing stop
-26. ton_trading_auto_execute                 → auto-execute trades when price triggers are met
-27. ton_trading_get_portfolio_summary        → portfolio overview with unrealized P&L
-28. ton_trading_rebalance_portfolio          → calculate rebalancing trades for target allocations
-29. ton_trading_get_technical_indicators     → RSI, MACD, Bollinger Bands for a token
-30. ton_trading_get_order_book_depth         → liquidity analysis and price impact
-31. ton_trading_create_schedule              → create recurring DCA or grid trading schedule
-32. ton_trading_cancel_schedule              → cancel one or more scheduled trades
-33. ton_trading_get_performance_dashboard    → real-time P&L, win rate, daily breakdown
-34. ton_trading_export_trades                → export trade history for external analysis
-35. ton_trading_dynamic_stop_loss            → volatility-adjusted stop-loss using ATR
-36. ton_trading_position_sizing              → optimal position size based on volatility
-37. ton_trading_cross_dex_routing            → optimal split routing across multiple DEXes
-38. ton_trading_get_best_price               → compare prices across STON.fi, DeDust, TONCO
-39. ton_trading_get_open_positions           → list open real or simulation positions
-40. ton_trading_close_position               → close one open position by trade ID
-41. ton_trading_close_all_positions          → close all open positions for a mode
+22. ton_trading_get_scheduled_trades         → list pending scheduled trades and flag due ones
+23. ton_trading_execute_scheduled_trade      → fill a due scheduled trade once, atomically (DM-only)
+24. ton_trading_reset_simulation_balance     → reset virtual balance to starting amount
+25. ton_trading_set_simulation_balance       → manually set the virtual balance
+26. ton_trading_set_take_profit              → standalone take-profit with optional trailing stop
+27. ton_trading_auto_execute                 → auto-execute trades when price triggers are met
+28. ton_trading_get_portfolio_summary        → portfolio overview with unrealized P&L
+29. ton_trading_rebalance_portfolio          → calculate rebalancing trades for target allocations
+30. ton_trading_get_technical_indicators     → RSI, MACD, Bollinger Bands for a token
+31. ton_trading_get_order_book_depth         → synthetic depth and price-impact analysis
+32. ton_trading_create_schedule              → create recurring DCA or grid trading schedule
+33. ton_trading_cancel_schedule              → cancel one or more scheduled trades
+34. ton_trading_get_performance_dashboard    → real-time P&L, win rate, daily breakdown
+35. ton_trading_export_trades                → export trade history for external analysis
+36. ton_trading_dynamic_stop_loss            → volatility-adjusted stop-loss using ATR
+37. ton_trading_position_sizing              → optimal position size based on volatility
+38. ton_trading_cross_dex_routing            → optimal split routing across multiple DEXes
+39. ton_trading_get_best_price               → compare prices across STON.fi, DeDust, TONCO
+40. ton_trading_get_open_positions           → list open real or simulation positions
+41. ton_trading_close_position               → close one open position by trade ID
+42. ton_trading_close_all_positions          → close all open positions for a mode
 ```
 
 ## Tools
@@ -74,7 +75,7 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_get_token_listings` | Fetch recently listed tokens on TON DEXes for sniping | data-bearing |
 | `ton_trading_get_token_info` | Detailed token info: price, market cap, holders, volume | data-bearing |
 | `ton_trading_validate_token` | Safety-check a token: liquidity, volume, rug-pull signals | data-bearing |
-| `ton_trading_get_top_traders` | Find top-performing trader wallets ranked by win rate | data-bearing |
+| `ton_trading_get_top_traders` | Find the most active wallets ranked by USD volume and trade count | data-bearing |
 | `ton_trading_get_trader_performance` | Analyse on-chain trading performance of a wallet | data-bearing |
 | `ton_trading_get_active_pools` | List active liquidity pools sorted by 24-h volume | data-bearing |
 | `ton_trading_get_farms_with_apy` | List yield farming opportunities with estimated APY | data-bearing |
@@ -86,6 +87,7 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_get_optimal_position_size` | Kelly Criterion and fixed-fraction position sizing | data-bearing |
 | `ton_trading_schedule_trade` | Store a pending trade for future execution | action |
 | `ton_trading_get_scheduled_trades` | List pending scheduled trades and flag due ones | data-bearing |
+| `ton_trading_execute_scheduled_trade` | Fill a due scheduled trade once, atomically marking it executed (DM-only) | action |
 | `ton_trading_reset_simulation_balance` | Reset the simulation balance to a starting amount | action |
 | `ton_trading_set_simulation_balance` | Manually set the simulation balance | action |
 | `ton_trading_set_take_profit` | Register standalone take-profit rule with optional trailing stop | action |
@@ -93,7 +95,7 @@ Each tool does exactly one thing. The LLM composes them:
 | `ton_trading_get_portfolio_summary` | Comprehensive portfolio overview with unrealized P&L | data-bearing |
 | `ton_trading_rebalance_portfolio` | Calculate trades needed to hit target allocations | data-bearing |
 | `ton_trading_get_technical_indicators` | RSI, MACD, Bollinger Bands for a TON token pair | data-bearing |
-| `ton_trading_get_order_book_depth` | Order book depth, liquidity, and price impact analysis | data-bearing |
+| `ton_trading_get_order_book_depth` | Synthetic depth, liquidity, and price-impact analysis from one-directional DEX quotes | data-bearing |
 | `ton_trading_create_schedule` | Create recurring DCA or grid trading schedule | action |
 | `ton_trading_cancel_schedule` | Cancel one or more scheduled (pending) trades | action |
 | `ton_trading_get_performance_dashboard` | Real-time P&L, win rate, and daily trade breakdown | data-bearing |
@@ -367,7 +369,7 @@ Risk parameters are enforced by `ton_trading_validate_trade` before any trade:
 
 - **maxTradePercent** (default 10%) — no single trade can exceed this percentage of the balance
 - **minBalanceTON** (default 1 TON) — trading blocked if balance falls below this floor
-- **scope: dm-only** on `ton_trading_execute_swap`, `ton_trading_auto_execute`, `ton_trading_close_position`, and `ton_trading_close_all_positions` — real trades and closes only in direct messages
+- **scope: dm-only** on `ton_trading_execute_swap`, `ton_trading_auto_execute`, `ton_trading_execute_scheduled_trade`, `ton_trading_close_position`, and `ton_trading_close_all_positions` — real trades and closes only in direct messages
 
 The LLM reads the validation result and decides whether to proceed.
 
