@@ -29,7 +29,7 @@ function makeMockDb(rows = {}) {
           return null;
         },
         all: () => rows.trades ?? [],
-        run: () => ({ lastInsertRowid: rows.lastInsertRowid ?? 1 }),
+        run: () => ({ lastInsertRowid: rows.lastInsertRowid ?? 1, changes: rows.changes ?? 1 }),
       };
     },
   };
@@ -99,6 +99,172 @@ function makeContext(overrides = {}) {
   };
 }
 
+// ─── Stateful in-memory DB ────────────────────────────────────────────────────
+// Unlike makeMockDb (which returns static rows), this mock actually persists
+// INSERTs and applies UPDATEs so an open→close trade cycle can be exercised
+// end-to-end (used to reproduce issue #182).
+function makeStatefulDb() {
+  const trades = [];
+  const simBalanceRows = [];
+  const scheduled = [];
+  let tradeSeq = 0;
+  let schedSeq = 0;
+
+  return {
+    _trades: trades,
+    _simBalanceRows: simBalanceRows,
+    _scheduled: scheduled,
+    exec: () => {},
+    prepare: (sql) => ({
+      get: (...args) => {
+        if (sql.includes("FROM sim_balance")) {
+          return simBalanceRows.length ? simBalanceRows[simBalanceRows.length - 1] : null;
+        }
+        if (sql.includes("FROM scheduled_trades") && sql.includes("WHERE id")) {
+          return scheduled.find((s) => s.id === args[0]) ?? null;
+        }
+        if (sql.includes("FROM trade_journal") && sql.includes("WHERE id")) {
+          return trades.find((t) => t.id === args[0]) ?? null;
+        }
+        return null;
+      },
+      all: (...args) => {
+        if (sql.includes("FROM scheduled_trades")) {
+          let rows = scheduled.slice();
+          if (sql.includes("status = ?")) {
+            const status = args[0];
+            rows = rows.filter((s) => s.status === status);
+          }
+          rows.sort((a, b) => a.execute_at - b.execute_at);
+          const limit = args[args.length - 1];
+          return typeof limit === "number" ? rows.slice(0, limit) : rows;
+        }
+        return trades.slice();
+      },
+      run: (...args) => {
+        if (sql.includes("INSERT INTO sim_balance")) {
+          simBalanceRows.push({ timestamp: args[0], balance: args[1] });
+          return { lastInsertRowid: simBalanceRows.length, changes: 1 };
+        }
+        if (sql.includes("INSERT INTO trade_journal")) {
+          const real = sql.includes("'real'");
+          // simulation INSERT binds: timestamp, from, to, amount_in, amount_out, entry_price_usd, note
+          // real INSERT binds:       timestamp, from, to, amount_in, amount_out, entry_price_usd
+          const row = {
+            id: ++tradeSeq,
+            timestamp: args[0],
+            mode: real ? "real" : "simulation",
+            action: "buy",
+            from_asset: args[1],
+            to_asset: args[2],
+            amount_in: args[3],
+            amount_out: args[4] ?? null,
+            entry_price_usd: args[5] ?? null,
+            exit_price_usd: null,
+            pnl: null,
+            pnl_percent: null,
+            status: "open",
+            note: real ? null : (args[6] ?? null),
+          };
+          trades.push(row);
+          return { lastInsertRowid: row.id, changes: 1 };
+        }
+        if (sql.includes("UPDATE trade_journal")) {
+          // Full close (closeTradeJournalEntry): SET amount_out=?, exit_price_usd=?,
+          // pnl=?, pnl_percent=?, status='closed', note=COALESCE(?, note) WHERE id=?
+          if (sql.includes("SET amount_out")) {
+            const id = args[5];
+            const row = trades.find((t) => t.id === id);
+            // WHERE id = ? AND status != 'closed' — already-closed rows are not
+            // matched, so a second close affects 0 rows (issue #182).
+            if (!row || row.status === "closed") return { lastInsertRowid: id, changes: 0 };
+            row.amount_out = args[0];
+            row.exit_price_usd = args[1];
+            row.pnl = args[2];
+            row.pnl_percent = args[3];
+            if (args[4] != null) row.note = args[4];
+            row.status = "closed";
+            return { lastInsertRowid: id, changes: 1 };
+          }
+          // Status transitions for the close compare-and-swap (issue #182):
+          //   claim    SET status='closing'      WHERE id=? AND status='open'
+          //   release  SET status='open'         WHERE id=? AND status='closing'
+          //   terminal SET status='close_failed', note=COALESCE(?, note) WHERE id=?
+          // Mirror SQLite's "changes" so the guard can actually be tested.
+          let target = null;
+          if (sql.includes("SET status = 'closing'")) target = "closing";
+          else if (sql.includes("SET status = 'open'")) target = "open";
+          else if (sql.includes("SET status = 'close_failed'")) target = "close_failed";
+          let guard = null;
+          if (sql.includes("AND status = 'open'")) guard = "open";
+          else if (sql.includes("AND status = 'closing'")) guard = "closing";
+          const id = args[args.length - 1];
+          const row = trades.find((t) => t.id === id);
+          if (!row) return { lastInsertRowid: id, changes: 0 };
+          if (guard && row.status !== guard) return { lastInsertRowid: id, changes: 0 };
+          if (target === "close_failed" && args[0] != null) row.note = args[0];
+          if (target) row.status = target;
+          return { lastInsertRowid: id, changes: 1 };
+        }
+        if (sql.includes("INSERT INTO scheduled_trades")) {
+          // binds: created_at, execute_at, mode, from, to, amount, note
+          const row = {
+            id: ++schedSeq,
+            created_at: args[0],
+            execute_at: args[1],
+            mode: args[2],
+            from_asset: args[3],
+            to_asset: args[4],
+            amount: args[5],
+            note: args[6] ?? null,
+            status: "pending",
+            trade_id: null,
+          };
+          scheduled.push(row);
+          return { lastInsertRowid: row.id, changes: 1 };
+        }
+        if (sql.includes("UPDATE scheduled_trades")) {
+          // trade_id linkage: SET trade_id = ? WHERE id = ?
+          if (sql.includes("SET trade_id = ?")) {
+            const [tradeId, id] = args;
+            const row = scheduled.find((s) => s.id === id);
+            if (row) {
+              row.trade_id = tradeId;
+              return { changes: 1 };
+            }
+            return { changes: 0 };
+          }
+          // status transitions (CAS claim / release / cancel) keyed by id —
+          // mirror SQLite's "changes" so compare-and-swap logic can be tested.
+          if (sql.includes("WHERE id = ?")) {
+            let target;
+            if (sql.includes("SET status = 'executed'")) target = "executed";
+            else if (sql.includes("SET status = 'pending'")) target = "pending";
+            else if (sql.includes("SET status = 'cancelled'")) target = "cancelled";
+            else if (sql.includes("SET status = ?")) target = args[0];
+            let guard = null;
+            if (sql.includes("AND status = 'pending'")) guard = "pending";
+            else if (sql.includes("AND status = 'executed'")) guard = "executed";
+            const id = args[args.length - 1];
+            const row = scheduled.find((s) => s.id === id);
+            if (!row) return { changes: 0 };
+            if (guard && row.status !== guard) return { changes: 0 };
+            row.status = target;
+            return { changes: 1 };
+          }
+          return { changes: 0 };
+        }
+        return { lastInsertRowid: 1, changes: 1 };
+      },
+    }),
+  };
+}
+
+function makeStatefulSdk(overrides = {}) {
+  const db = overrides.db ?? makeStatefulDb();
+  return { ...makeSdk(overrides), db };
+}
+
 // ─── Load plugin once ─────────────────────────────────────────────────────────
 
 let mod;
@@ -157,10 +323,10 @@ describe("ton-trading-bot plugin", () => {
       assert.ok(Array.isArray(toolList));
     });
 
-    it("exports exactly 41 tools", () => {
+    it("exports exactly 42 tools", () => {
       const sdk = makeSdk();
       const toolList = mod.tools(sdk);
-      assert.equal(toolList.length, 41);
+      assert.equal(toolList.length, 42);
     });
 
     it("exports position management tools documented in issue #144", () => {
@@ -482,7 +648,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -561,6 +727,40 @@ describe("ton-trading-bot plugin", () => {
       );
       assert.equal(result.success, false);
       assert.ok(result.error.includes("insufficient liquidity"));
+    });
+
+    it("logs loudly and rethrows when a real swap succeeds on-chain but journaling fails (issue #182)", async () => {
+      // The swap has already moved real funds; if the trade_journal INSERT then
+      // throws, the position must not silently vanish. recordRealSwap must emit a
+      // CRITICAL, reconcile-manually log before propagating the failure so the
+      // operator knows funds moved without a recorded trade.
+      const errorLogs = [];
+      const sdk = makeSdk({
+        log: { info: () => {}, warn: () => {}, error: (m) => errorLogs.push(m), debug: () => {} },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => null,
+            all: () => [],
+            run: () => {
+              if (sql.includes("INSERT INTO trade_journal")) {
+                throw new Error("disk I/O error");
+              }
+              return { lastInsertRowid: 1, changes: 1 };
+            },
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_swap");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test", amount: "2" },
+        makeContext()
+      );
+      assert.equal(result.success, false);
+      assert.ok(
+        errorLogs.some((m) => /CRITICAL/.test(m) && /reconcile/i.test(m)),
+        `Expected a loud CRITICAL reconcile log, got: ${JSON.stringify(errorLogs)}`
+      );
     });
 
     it("is dm-only scope", () => {
@@ -734,7 +934,7 @@ describe("ton-trading-bot plugin", () => {
                 capturedSql = sql;
                 capturedArgs = args;
               }
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -827,6 +1027,221 @@ describe("ton-trading-bot plugin", () => {
     });
   });
 
+  // ── Unit-safe P&L end-to-end (issue #182) ─────────────────────────────────
+  describe("unit-safe P&L (issue #182)", () => {
+    it("auto-records the from_asset USD price as entry_price_usd when omitted (TON)", async () => {
+      const sdk = makeSdk({
+        dbRows: { simBalance: { balance: 1000 }, lastInsertRowid: 1 },
+        ton: { ...makeSdk().ton, getPrice: async () => ({ usd: 1.6809, source: "mock" }) },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_simulate_trade");
+      // Agent omits entry_price_usd entirely (the root cause of #182).
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "USDT", amount_in: 10, expected_amount_out: 16.8 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(
+        result.data.entry_price_usd,
+        1.6809,
+        "entry_price_usd should be auto-inferred from the live TON price"
+      );
+    });
+
+    it("auto-records $1 entry price for a stablecoin from_asset when omitted", async () => {
+      const sdk = makeSdk({ dbRows: { simBalance: { balance: 1000 }, lastInsertRowid: 1 } });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_simulate_trade");
+      const result = await tool.execute(
+        { from_asset: "USDT", to_asset: "TON", amount_in: 50, expected_amount_out: 30 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.entry_price_usd, 1, "stablecoin entry price should default to $1");
+    });
+
+    it("reproduces issue #182: flat TON/USDT round trip yields a tiny P&L, not $7.39 / 73.89%", async () => {
+      // Exact scenario from the bug report: open a TON→USDT simulation trade
+      // WITHOUT supplying entry_price_usd, then close it. The old code mixed
+      // units (raw TON treated as USD vs USD value) and reported +$7.39 / +73.89%
+      // on a position whose TON price barely moved ($1.6809 → $1.73886).
+      const prices = [1.6809, 1.73886]; // entry price first, exit price second
+      let priceCall = 0;
+      const sdk = makeStatefulSdk({
+        ton: {
+          ...makeSdk().ton,
+          getPrice: async () => ({ usd: prices[Math.min(priceCall++, prices.length - 1)], source: "mock" }),
+        },
+      });
+      const tools = mod.tools(sdk);
+      const simulate = tools.find((t) => t.name === "ton_trading_simulate_trade");
+      const record = tools.find((t) => t.name === "ton_trading_record_trade");
+
+      const open = await simulate.execute(
+        { from_asset: "TON", to_asset: "USDT", amount_in: 10, expected_amount_out: 16.8 },
+        makeContext()
+      );
+      assert.equal(open.success, true);
+
+      const close = await record.execute(
+        { trade_id: open.data.trade_id, amount_out: 17.3886 },
+        makeContext()
+      );
+      assert.equal(close.success, true);
+
+      // Correct P&L ≈ 10 * (1.73886 - 1.6809) = $0.5796, ≈ +3.45%.
+      assert.ok(
+        Math.abs(close.data.pnl - 0.5796) < 0.01,
+        `pnl should be ≈ $0.58, got ${close.data.pnl}`
+      );
+      assert.ok(
+        Math.abs(close.data.pnl_percent - 3.45) < 0.1,
+        `pnl_percent should be ≈ 3.45%, got ${close.data.pnl_percent}`
+      );
+      // Guard against the original unit-mismatch bug explicitly.
+      assert.ok(close.data.pnl < 1, `pnl must not be the buggy ~$7.39, got ${close.data.pnl}`);
+      assert.ok(close.data.pnl_percent < 10, `pnl_percent must not be the buggy ~73.89%, got ${close.data.pnl_percent}`);
+    });
+
+    it("never mixes units: missing entry price falls back to raw same-unit diff, not USD scaling", async () => {
+      // When entry_price_usd is unknown we must NOT scale amount_in by the exit
+      // USD price (that was the #182 bug). With no entry price recorded, closing
+      // must use a unit-consistent raw diff instead of amount_in * exit_price.
+      const openTrade = {
+        id: 50,
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "USDT",
+        amount_in: 10,
+        entry_price_usd: null, // never recorded
+        amount_out: null,
+        status: "open",
+      };
+      const sdk = makeSdk({ dbRows: { trade: openTrade } });
+      const record = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      // amount_out is the TON received on a reverse close (≈10.2 TON).
+      const result = await record.execute(
+        { trade_id: 50, amount_out: 10.2, exit_price_usd: 1.73886 },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // Old buggy branch: 10 * 1.73886 - 10 = +7.39. Unit-safe branch: 10.2 - 10 = +0.2.
+      assert.ok(
+        Math.abs(result.data.pnl - 0.2) < 1e-9,
+        `pnl should be the raw diff 0.2, got ${result.data.pnl}`
+      );
+    });
+  });
+
+  // ── Statistical consistency (issue #182) ──────────────────────────────────
+  describe("statistical consistency (issue #182)", () => {
+    it("get_portfolio_summary: win + loss + breakeven + unscored === total_closed_trades", async () => {
+      // The bug report saw total_closed_trades=177 while win+loss=172 — the 5
+      // missing rows were breakeven / unscored (null-pnl) trades hidden from the
+      // books. Every closed trade must now be accounted for in exactly one bucket.
+      const closedTrades = [
+        { pnl: 5, pnl_percent: 3, mode: "simulation" },
+        { pnl: 8, pnl_percent: 4, mode: "simulation" },
+        { pnl: -4, pnl_percent: -2, mode: "simulation" },
+        { pnl: -1, pnl_percent: -1, mode: "simulation" },
+        { pnl: 0, pnl_percent: 0, mode: "simulation" }, // breakeven
+        { pnl: null, pnl_percent: null, mode: "simulation" }, // unscored
+        { pnl: undefined, pnl_percent: undefined, mode: "simulation" }, // unscored
+      ];
+      const sdk = {
+        ...makeSdk(),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => ({ balance: 1000 }),
+            all: () => (sql.includes("status = 'closed'") ? closedTrades : []),
+            run: () => ({ lastInsertRowid: 1, changes: 0 }),
+          }),
+        },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_portfolio_summary");
+      const result = await tool.execute({ mode: "simulation" }, makeContext());
+      assert.equal(result.success, true);
+      const d = result.data;
+      assert.equal(d.total_closed_trades, 7);
+      assert.equal(d.win_count, 2);
+      assert.equal(d.loss_count, 2);
+      assert.equal(d.breakeven_count, 1);
+      assert.equal(d.unscored_count, 2);
+      assert.equal(
+        d.win_count + d.loss_count + d.breakeven_count + d.unscored_count,
+        d.total_closed_trades,
+        "the books must reconcile exactly"
+      );
+      // Win rate is over decisive trades only: 2 / (2 + 2) = 0.5.
+      assert.equal(d.win_rate, 0.5);
+      // Realized P&L sums only finite pnl: 5 + 8 - 4 - 1 = 8 (null/undefined excluded).
+      assert.equal(d.realized_pnl_usd, 8);
+    });
+
+    it("calculate_risk_metrics: unscored trades (null pnl_percent) do not dilute the win rate", async () => {
+      // "65 losses but avg loss $0" stemmed from null P&L coerced to 0 and counted
+      // in the denominator. Unscored rows must be excluded from the observations.
+      const trades = [
+        { pnl_percent: 10 },
+        { pnl_percent: -5 },
+        { pnl_percent: null }, // unscored — must be ignored
+        { pnl_percent: undefined }, // unscored — must be ignored
+      ];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.trades_analysed, 4);
+      assert.equal(result.data.scored_trades, 2);
+      assert.equal(result.data.win_count, 1);
+      assert.equal(result.data.loss_count, 1);
+      // Win rate must be 1 / 2 = 0.5, NOT 1 / 4 = 0.25 (diluted by unscored rows).
+      assert.equal(result.data.win_rate, 0.5);
+    });
+
+    it("get_performance_dashboard: breakeven and unscored trades reconcile; avg loss is never falsely $0", async () => {
+      const closedTrades = [
+        { id: 1, pnl: 10, pnl_percent: 5, timestamp: Date.now() - 1000 },
+        { id: 2, pnl: -3, pnl_percent: -2, timestamp: Date.now() - 2000 },
+        { id: 3, pnl: 0, pnl_percent: 0, timestamp: Date.now() - 3000 }, // breakeven
+        { id: 4, pnl: null, pnl_percent: null, timestamp: Date.now() - 4000 }, // unscored
+      ];
+      const sdk = {
+        ...makeSdk(),
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => ({ count: 0 }),
+            all: () => (sql.includes("status = 'closed'") ? closedTrades : []),
+            run: () => ({ lastInsertRowid: 1, changes: 0 }),
+          }),
+        },
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_performance_dashboard");
+      const result = await tool.execute({ mode: "all", days: 30 }, makeContext());
+      assert.equal(result.success, true);
+      const d = result.data;
+      assert.equal(d.total_trades, 4);
+      assert.equal(d.win_count, 1);
+      assert.equal(d.loss_count, 1);
+      assert.equal(d.breakeven_count, 1);
+      assert.equal(d.unscored_count, 1);
+      assert.equal(
+        d.win_count + d.loss_count + d.breakeven_count + d.unscored_count,
+        d.total_trades,
+        "the books must reconcile exactly"
+      );
+      // avg loss comes from real losses only — never a misleading $0.
+      assert.equal(d.avg_loss_usd, -3);
+      assert.equal(d.win_rate, 0.5); // 1 / (1 + 1)
+    });
+  });
+
   // ── Position management tools (issue #144) ────────────────────────────────
   describe("position management tools", () => {
     it("lists open positions filtered by mode", async () => {
@@ -910,10 +1325,13 @@ describe("ton-trading-bot plugin", () => {
             },
             all: () => [],
             run: (...args) => {
-              if (sql.includes("UPDATE trade_journal")) updatedTradeArgs = args;
+              // The close path issues two UPDATE trade_journal statements: the
+              // 'open'→'closing' claim, then the full close. Capture only the
+              // full close so the assertions still see the P&L row.
+              if (sql.includes("UPDATE trade_journal") && sql.includes("SET amount_out")) updatedTradeArgs = args;
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
               if (sql.includes("UPDATE stop_loss_rules")) closedRulesForTrade = args[0];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -994,6 +1412,62 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.close.dex, "stonfi");
     });
 
+    it("never fires a second reverse swap when a real close races with itself (issue #182)", async () => {
+      const db = makeStatefulDb();
+      // Seed one real open position directly into the in-memory journal.
+      db._trades.push({
+        id: 1,
+        timestamp: 1,
+        mode: "real",
+        action: "buy",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: 25,
+        entry_price_usd: 2,
+        exit_price_usd: null,
+        pnl: null,
+        pnl_percent: null,
+        status: "open",
+        note: null,
+      });
+      let swapCalls = 0;
+      const sdk = makeStatefulSdk({
+        db,
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5", balanceNano: "100500000000" }),
+          getPrice: async () => ({ usd: 2.2, source: "mock", timestamp: 1 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "11", price: "11" }, recommended: "stonfi" }),
+            swap: async () => {
+              swapCalls += 1;
+              return { expectedOutput: "11", minOutput: "10.5", dex: "stonfi" };
+            },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_close_position");
+      // Two concurrent closes both read the position as 'open'. Without the
+      // compare-and-swap claim each would submit its own reverse swap, spending
+      // the same funds twice.
+      const [r1, r2] = await Promise.all([
+        tool.execute({ trade_id: 1, mode: "real", slippage: 0.02, dex: "stonfi" }, makeContext()),
+        tool.execute({ trade_id: 1, mode: "real", slippage: 0.02, dex: "stonfi" }, makeContext()),
+      ]);
+      const successes = [r1, r2].filter((r) => r.success);
+      const failures = [r1, r2].filter((r) => !r.success);
+      assert.equal(successes.length, 1, "exactly one close should succeed");
+      assert.equal(failures.length, 1, "the racing close should be rejected");
+      assert.ok(
+        /already being closed|is not open/.test(failures[0].error),
+        `unexpected rejection reason: ${failures[0].error}`
+      );
+      assert.equal(swapCalls, 1, "the reverse swap must fire exactly once");
+      assert.equal(db._trades[0].status, "closed");
+    });
+
     it("closes all open positions for the selected mode", async () => {
       const openTrades = [
         { id: 24, mode: "simulation", from_asset: "TON", to_asset: "EQTokenA", amount_in: 5, amount_out: 8, status: "open" },
@@ -1023,8 +1497,10 @@ describe("ton-trading-bot plugin", () => {
             },
             all: () => openTrades,
             run: () => {
-              if (sql.includes("UPDATE trade_journal")) updatedCount += 1;
-              return { lastInsertRowid: 1 };
+              // Count only the full close, not the 'open'→'closing' claim that
+              // now precedes it (issue #182).
+              if (sql.includes("UPDATE trade_journal") && sql.includes("SET amount_out")) updatedCount += 1;
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -1222,6 +1698,45 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.deepEqual(result.data, cachedData);
     });
+
+    it("ranks active wallets by volume instead of a unit-mixing fake win rate (issue #182)", async () => {
+      // A high-volume wallet whose trades all show price_to < price_from. The old
+      // code computed isWin = (price_to_in_currency_token - price_from_in_currency_token) > 0
+      // — subtracting the prices of two *different* tokens — got a 0% win rate and
+      // dropped the wallet below the 0.55 min_win_rate default. Volume is the only
+      // genuinely same-unit signal, so the honest ranking keeps the wallet.
+      const trades = Array.from({ length: 12 }, () => ({
+        attributes: {
+          tx_from_address: "EQWhale",
+          kind: "sell",
+          price_from_in_currency_token: "2",
+          price_to_in_currency_token: "1",
+          volume_in_usd: "100",
+        },
+      }));
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = async (url) => {
+        if (String(url).includes("trending_pools")) {
+          return { ok: true, status: 200, json: async () => ({ data: [{ id: "ton_EQPool1" }] }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ data: trades }) };
+      };
+      try {
+        const sdk = makeSdk();
+        const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_top_traders");
+        const result = await tool.execute({}, {});
+        assert.equal(result.success, true);
+        const whale = result.data.traders.find((t) => t.wallet === "EQWhale");
+        assert.ok(whale, "high-volume wallet must survive ranking, not be filtered by a fake win rate");
+        assert.equal(whale.trades, 12);
+        assert.equal(whale.total_volume_usd, 1200);
+        assert.equal(whale.win_rate, undefined, "no fabricated win_rate should be reported");
+        assert.equal(result.data.ranked_by, "total_volume_usd");
+        assert.ok(/not by profitability|cannot establish/i.test(result.data.note ?? ""));
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
   });
 
   // ── ton_trading_get_trader_performance ─────────────────────────────────────
@@ -1239,6 +1754,50 @@ describe("ton-trading-bot plugin", () => {
       const result = await tool.execute({ wallet_address: "EQTest" }, {});
       assert.equal(result.success, true);
       assert.deepEqual(result.data, cachedData);
+    });
+
+    it("uses same-unit TON flow instead of comparing two different jetton amounts (issue #182)", async () => {
+      // Buying a memecoin: paid 1 TON, received 5,000,000 memecoin units. The old
+      // "win" heuristic compared amount_out (5,000,000) > amount_in (1) across two
+      // *different* jettons and always scored it a win (win_rate 1.0). ton_in/ton_out
+      // are both nanotons, so the honest net flow is -1 TON.
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          events: [
+            {
+              actions: [
+                {
+                  type: "JettonSwap",
+                  JettonSwap: {
+                    amount_in: "1",
+                    amount_out: "5000000",
+                    ton_in: 1_000_000_000,
+                    ton_out: 0,
+                    jetton_master_out: { address: "EQMeme" },
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      });
+      try {
+        const sdk = makeSdk();
+        const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_trader_performance");
+        const result = await tool.execute({ wallet_address: "EQTrader" }, {});
+        assert.equal(result.success, true);
+        assert.equal(result.data.total_swaps, 1);
+        assert.equal(result.data.buys, 1);
+        assert.equal(result.data.sells, 0);
+        assert.equal(result.data.net_ton_flow, -1, "spent 1 TON, received 0 → net -1 TON");
+        assert.equal(result.data.win_rate, undefined, "no fabricated win_rate should be reported");
+        assert.ok(/not realized profit/i.test(result.data.note ?? ""));
+      } finally {
+        globalThis.fetch = origFetch;
+      }
     });
   });
 
@@ -1346,6 +1905,38 @@ describe("ton-trading-bot plugin", () => {
       assert.ok("win_rate" in result.data);
       assert.ok("total_pnl_percent" in result.data);
     });
+
+    it("sharpe_ratio uses the sample stddev (n-1 divisor)", async () => {
+      // buy_and_hold buys on every trade. With huge exit/stop thresholds the
+      // effective return equals the raw pnl, so capital 1000 →1100 →1320 and the
+      // per-trade returns are [0.10, 0.20]. Sample stddev (n-1) → sharpe ≈ 2.1213;
+      // population stddev (n) would give 3.0.
+      const trades = [
+        { id: 1, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 0, status: "closed" },
+        { id: 2, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 10, status: "closed" },
+        { id: 3, from_asset: "TON", to_asset: "EQCxE6test", pnl_percent: 20, status: "closed" },
+      ];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_backtest");
+      const result = await tool.execute(
+        {
+          strategy: "buy_and_hold", from_asset: "TON", to_asset: "EQCxE6test",
+          exit_threshold_percent: 1000, stop_loss_percent: 1000,
+        },
+        {}
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.simulated_trades, 2);
+      assert.ok(
+        Math.abs(result.data.sharpe_ratio - 2.1213) < 0.01,
+        `expected sample-stddev sharpe ≈ 2.1213, got ${result.data.sharpe_ratio}`
+      );
+    });
   });
 
   // ── ton_trading_calculate_risk_metrics ──────────────────────────────────────
@@ -1384,6 +1975,133 @@ describe("ton-trading-bot plugin", () => {
       assert.ok("max_drawdown_percent" in result.data);
       assert.ok("value_at_risk_percent" in result.data);
       assert.ok("sharpe_ratio" in result.data);
+    });
+
+    it("value_at_risk_percent is 0 when every trade is a winner (no phantom VaR — issue #182)", async () => {
+      // VaR is a loss magnitude. A history with no losing trades has zero
+      // downside at the percentile. The old code used Math.abs(var95), turning
+      // a winning percentile return into a positive "risk" out of thin air.
+      const trades = [
+        { pnl_percent: 5 }, { pnl_percent: 10 }, { pnl_percent: 8 },
+        { pnl_percent: 12 }, { pnl_percent: 3 },
+      ];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.equal(
+        result.data.value_at_risk_percent, 0,
+        "all-winning history must not report a positive value at risk"
+      );
+    });
+
+    it("sharpe_ratio uses the sample standard deviation (n-1 divisor)", async () => {
+      // returns = [0.10, 0.20], mean = 0.15.
+      // Sample variance (n-1): ((-0.05)^2 + 0.05^2) / 1 = 0.005 → stddev ≈ 0.070711
+      //   → sharpe = 0.15 / 0.070711 ≈ 2.1213.
+      // Population variance (n) would give stddev 0.05 → sharpe 3.0, so this
+      // value distinguishes the two divisors unambiguously.
+      const trades = [{ pnl_percent: 10 }, { pnl_percent: 20 }];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.ok(
+        Math.abs(result.data.sharpe_ratio - 2.1213) < 0.01,
+        `expected sample-stddev sharpe ≈ 2.1213, got ${result.data.sharpe_ratio}`
+      );
+    });
+
+    it("sharpe_ratio is null for a single scored trade (no n-1 division by zero)", async () => {
+      const trades = [{ pnl_percent: 10 }];
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => trades, run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_calculate_risk_metrics");
+      const result = await tool.execute({ mode: "all" }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.sharpe_ratio, null);
+    });
+  });
+
+  // ── ton_trading_get_technical_indicators ────────────────────────────────────
+  describe("ton_trading_get_technical_indicators", () => {
+    // GeckoTerminal's ohlcv_list is newest-first (descending timestamp). Build an
+    // ascending chronological ramp, then hand it to the mock in the API's order.
+    function rampCandlesNewestFirst() {
+      const base = 1_781_370_000;
+      const chronological = [];
+      for (let i = 0; i < 50; i++) {
+        const close = 100 + i; // upward trend: oldest 100 … newest 149
+        chronological.push([base + i * 3600, close, close + 0.5, close - 0.5, close, 1000]);
+      }
+      return chronological.slice().reverse(); // newest-first, as the API returns it
+    }
+
+    function mockFetchOk(ohlcvList) {
+      return async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: { attributes: { ohlcv_list: ohlcvList } } }),
+      });
+    }
+
+    it("sorts OHLCV ascending so current_price is the newest candle (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_technical_indicators");
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = mockFetchOk(rampCandlesNewestFirst());
+      try {
+        const result = await tool.execute({ token_address: "EQCtest" }, {});
+        assert.equal(result.success, true);
+        // Newest candle close is 149. Without the ascending sort the code read the
+        // first array element (the newest, but treated as oldest) and reported the
+        // oldest close (100) as current_price.
+        assert.equal(result.data.current_price, 149);
+        // An upward chronological trend must yield a positive MACD line; a
+        // time-reversed series would make it negative.
+        assert.ok(result.data.macd.macd_line > 0, `expected positive MACD line, got ${result.data.macd.macd_line}`);
+      } finally {
+        globalThis.fetch = origFetch;
+      }
+    });
+
+    it("MACD signal line is the EMA of the MACD line, not of raw prices (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_technical_indicators");
+      const origFetch = globalThis.fetch;
+      globalThis.fetch = mockFetchOk(rampCandlesNewestFirst());
+      try {
+        const result = await tool.execute({ token_address: "EQCtest" }, {});
+        assert.equal(result.success, true);
+        // The MACD line for prices near 100-149 is a small single-digit number.
+        // The signal line is its 9-EMA, so it lives on the same small scale and
+        // the histogram (macd − signal) is tiny. The old code took the 9-EMA of
+        // the raw prices (~145), making the histogram ≈ -140.
+        assert.ok(
+          Math.abs(result.data.macd.histogram) < 5,
+          `signal line should track the MACD line: histogram ${result.data.macd.histogram} is too large`
+        );
+        assert.ok(
+          result.data.macd.signal_line < 50,
+          `signal line ${result.data.macd.signal_line} looks like an EMA of prices, not of the MACD line`
+        );
+      } finally {
+        globalThis.fetch = origFetch;
+      }
     });
   });
 
@@ -1663,6 +2381,27 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, true);
       assert.equal(result.data.mode, "real");
     });
+
+    it("clamps the fixed-fraction size to the balance — an unleveraged position cannot exceed the wallet (issue #182)", async () => {
+      const sdk = makeSdk({
+        db: {
+          exec: () => {},
+          prepare: () => ({ get: () => null, all: () => [], run: () => ({ lastInsertRowid: 1 }) }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_optimal_position_size");
+      // balance = 100.5 (mock). risk 2% / stop 1% → raw fixed-fraction = 100.5 * 2 = 201,
+      // more than the whole wallet. Spot TON trading is unleveraged, so it must be capped.
+      const result = await tool.execute({ mode: "real", stop_loss_percent: 1, risk_percent: 2 }, {});
+      assert.equal(result.success, true);
+      assert.equal(result.data.balance, 100.5);
+      assert.ok(
+        result.data.fixed_fraction_position_size <= result.data.balance,
+        `fixed-fraction ${result.data.fixed_fraction_position_size} must not exceed balance ${result.data.balance}`
+      );
+      assert.equal(result.data.fixed_fraction_position_size, 100.5);
+      assert.equal(result.data.fixed_fraction_capped_by_balance, true);
+    });
   });
 
   // ── ton_trading_schedule_trade ──────────────────────────────────────────────
@@ -1744,6 +2483,129 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.data.due_now, 1);
       assert.ok(result.data.scheduled_trades[0].is_due === true);
       assert.ok(result.data.scheduled_trades[1].is_due === false);
+    });
+  });
+
+  // ── ton_trading_execute_scheduled_trade (issue #182: DCA stuck pending) ──────
+  describe("ton_trading_execute_scheduled_trade (issue #182)", () => {
+    function seedScheduled(db, overrides = {}) {
+      const row = {
+        id: 1,
+        created_at: 0,
+        execute_at: Date.now() - 1000, // due by default
+        mode: "simulation",
+        from_asset: "TON",
+        to_asset: "EQjetton",
+        amount: 5,
+        note: "[dca] order 1/3",
+        status: "pending",
+        trade_id: null,
+        ...overrides,
+      };
+      db._scheduled.push(row);
+      return row;
+    }
+
+    it("is DM-only and requires schedule_id", () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+      assert.ok(tool, "tool should be registered");
+      assert.equal(tool.scope, "dm-only");
+      assert.ok(tool.parameters?.required?.includes("schedule_id"));
+    });
+
+    it("fills a due simulation order and marks it executed", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      seedScheduled(db);
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+
+      const result = await tool.execute({ schedule_id: 1, expected_amount_out: 10 }, makeContext());
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.status, "executed");
+      assert.equal(typeof result.data.trade_id, "number");
+      // The scheduled row is advanced and linked to the journal trade it created.
+      assert.equal(db._scheduled[0].status, "executed");
+      assert.equal(db._scheduled[0].trade_id, result.data.trade_id);
+      // A real journal entry was opened with a unit-safe entry price (TON = $3.5).
+      assert.equal(db._trades.length, 1);
+      assert.equal(db._trades[0].mode, "simulation");
+      assert.equal(db._trades[0].status, "open");
+      assert.equal(db._trades[0].entry_price_usd, 3.5);
+    });
+
+    it("never executes the same order twice (no double-spend)", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      seedScheduled(db);
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+
+      const first = await tool.execute({ schedule_id: 1, expected_amount_out: 10 }, makeContext());
+      assert.equal(first.success, true);
+      assert.equal(db._trades.length, 1);
+
+      // A second poll on the same id must be a no-op — this is the core #182 fix.
+      const second = await tool.execute({ schedule_id: 1, expected_amount_out: 10 }, makeContext());
+      assert.equal(second.success, false);
+      assert.ok(/already executed/i.test(second.error));
+      assert.equal(db._trades.length, 1, "no second swap should be recorded");
+    });
+
+    it("refuses an order that is not due yet unless forced", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      seedScheduled(db, { execute_at: Date.now() + 3_600_000 }); // 1h in the future
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+
+      const tooEarly = await tool.execute({ schedule_id: 1, expected_amount_out: 10 }, makeContext());
+      assert.equal(tooEarly.success, false);
+      assert.ok(/not due/i.test(tooEarly.error));
+      assert.equal(db._scheduled[0].status, "pending");
+      assert.equal(db._trades.length, 0);
+
+      const forced = await tool.execute({ schedule_id: 1, expected_amount_out: 10, force: true }, makeContext());
+      assert.equal(forced.success, true);
+      assert.equal(db._scheduled[0].status, "executed");
+    });
+
+    it("requires expected_amount_out for simulation orders without claiming the order", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      seedScheduled(db);
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+
+      const result = await tool.execute({ schedule_id: 1 }, makeContext());
+      assert.equal(result.success, false);
+      assert.ok(/expected_amount_out/.test(result.error));
+      assert.equal(db._scheduled[0].status, "pending");
+    });
+
+    it("parks a failed real order as 'failed' so it is not silently retried", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      // Real swap throws after the claim — on-chain state is unknown, so the
+      // order must NOT be reset to pending (that could double-spend).
+      sdk.ton.dex.swap = async () => {
+        throw new Error("DEX timeout");
+      };
+      seedScheduled(db, { mode: "real" });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+
+      const result = await tool.execute({ schedule_id: 1 }, makeContext());
+      assert.equal(result.success, false);
+      assert.ok(/DEX timeout/.test(result.error));
+      assert.equal(db._scheduled[0].status, "failed");
+      assert.equal(db._trades.length, 0);
+    });
+
+    it("returns a clear error for a missing schedule id", async () => {
+      const db = makeStatefulDb();
+      const sdk = makeStatefulSdk({ db });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_execute_scheduled_trade");
+      const result = await tool.execute({ schedule_id: 999, expected_amount_out: 10 }, makeContext());
+      assert.equal(result.success, false);
+      assert.ok(/not found/.test(result.error));
     });
   });
 
@@ -1881,7 +2743,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -1925,7 +2787,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -1963,7 +2825,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2007,7 +2869,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2057,7 +2919,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2091,6 +2953,46 @@ describe("ton-trading-bot plugin", () => {
         `balance must NOT be the over-credited buggy value ~${buggyBalance.toFixed(3)}, got ${savedBalance}`
       );
     });
+
+    it("never double-credits the simulation balance when record_trade races with itself (issue #182)", async () => {
+      const db = makeStatefulDb();
+      db._simBalanceRows.push({ timestamp: 1, balance: 100 });
+      // A simulation TON position: entry_price_usd is set so record_trade awaits
+      // inferExitPriceUsd, giving the second concurrent call a chance to read the
+      // position as 'open' before the first one closes it.
+      db._trades.push({
+        id: 1,
+        timestamp: 1,
+        mode: "simulation",
+        action: "buy",
+        from_asset: "TON",
+        to_asset: "EQToken",
+        amount_in: 10,
+        amount_out: null,
+        entry_price_usd: 2,
+        exit_price_usd: null,
+        pnl: null,
+        pnl_percent: null,
+        status: "open",
+        note: null,
+      });
+      const sdk = makeStatefulSdk({ db });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_record_trade");
+      const [r1, r2] = await Promise.all([
+        tool.execute({ trade_id: 1, amount_out: 11, exit_price_usd: 2 }, makeContext()),
+        tool.execute({ trade_id: 1, amount_out: 11, exit_price_usd: 2 }, makeContext()),
+      ]);
+      const successes = [r1, r2].filter((r) => r.success);
+      const failures = [r1, r2].filter((r) => !r.success);
+      assert.equal(successes.length, 1, "only one record_trade should close the position");
+      assert.equal(failures.length, 1, "the racing record_trade must be rejected");
+      assert.ok(/already closed/.test(failures[0].error), `unexpected error: ${failures[0].error}`);
+      // Break-even (entry=exit=$2) credits the 10 TON principal exactly once:
+      // 100 + 10 = 110. A double credit would yield 120.
+      const finalBalance = db._simBalanceRows[db._simBalanceRows.length - 1].balance;
+      assert.equal(finalBalance, 110, `balance must be credited exactly once (110), got ${finalBalance}`);
+      assert.equal(db._trades[0].status, "closed");
+    });
   });
 
   // ── ton_trading_reset_simulation_balance ────────────────────────────────────
@@ -2106,7 +3008,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2131,7 +3033,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2158,7 +3060,7 @@ describe("ton-trading-bot plugin", () => {
             all: () => [],
             run: (...args) => {
               if (sql.includes("INSERT INTO sim_balance")) savedBalance = args[1];
-              return { lastInsertRowid: 1 };
+              return { lastInsertRowid: 1, changes: 1 };
             },
           }),
         },
@@ -2383,6 +3285,63 @@ describe("ton-trading-bot plugin", () => {
       assert.equal(result.success, false);
       assert.ok(result.error.includes("minimum") || result.error.includes("below"), `Unexpected error: ${result.error}`);
     });
+
+    it("routes a real non-TON sell through the wallet check instead of bypassing it (issue #182)", async () => {
+      // A real sell of a non-TON jetton used to skip every risk check (the gate
+      // was `from_asset === "TON"` only) and fire sdk.ton.dex.swap directly. It
+      // must now flow through recordRealSwap, which refuses to swap when the
+      // wallet is not initialized — so no on-chain swap is attempted at all.
+      let swapCalls = 0;
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => null,
+          getBalance: async () => ({ balance: "100", balanceNano: "100000000000" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "10", price: "10" }, recommended: "stonfi" }),
+            swap: async () => { swapCalls++; return { expectedOutput: "10", dex: "stonfi" }; },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        { from_asset: "EQJettonMasterAddress", to_asset: "TON", amount: 5, mode: "real" },
+        makeContext()
+      );
+      assert.equal(result.success, false);
+      assert.match(result.error, /wallet not initialized/i);
+      assert.equal(swapCalls, 0, "no on-chain swap may be attempted when the wallet is not initialized");
+    });
+
+    it("executes a real non-TON sell through recordRealSwap when the wallet is ready (issue #182)", async () => {
+      // The happy path for the same fix: with a wallet present, the real non-TON
+      // sell is recorded as a real trade via the shared helper (single swap call).
+      let swapCalls = 0;
+      const sdk = makeSdk({
+        dbRows: { lastInsertRowid: 77 },
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100", balanceNano: "100000000000" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: {
+            quote: async () => ({ stonfi: { output: "12", price: "12" }, recommended: "stonfi" }),
+            swap: async (p) => { swapCalls++; return { expectedOutput: "12", minOutput: "11.4", dex: p.dex ?? "stonfi" }; },
+          },
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        { from_asset: "EQJettonMasterAddress", to_asset: "TON", amount: 5, mode: "real" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      assert.equal(result.data.executed, true);
+      assert.equal(result.data.trade.trade_id, 77);
+      assert.equal(result.data.trade.mode, "real");
+      assert.equal(swapCalls, 1);
+    });
   });
 
   // ── ton_trading_get_portfolio_summary ──────────────────────────────────────
@@ -2405,6 +3364,58 @@ describe("ton-trading-bot plugin", () => {
       const result = await tool.execute({ mode: "simulation" }, makeContext());
       assert.equal(result.success, true);
       assert.equal(result.data.mode, "simulation");
+    });
+
+    it("computes unit-safe unrealized P&L and full TON exposure for open positions (issue #182)", async () => {
+      // Three open positions; TON = 3.5 USD:
+      //  A) bought 10 TON for 30 USDT (entry $1) → value 10*3.5=35, cost 30 → +5 USD
+      //  B) bought 35 USDT for 10 TON (entry $3.5) → value 35*1=35, cost 35 → 0 USD
+      //  C) bought an unknown jetton with 4 TON → held asset price unknown → unvalued
+      const openRows = [
+        { id: 1, mode: "simulation", from_asset: "USDT", to_asset: "TON", amount_in: 30, amount_out: 10, entry_price_usd: 1, timestamp: 1 },
+        { id: 2, mode: "simulation", from_asset: "TON", to_asset: "USDT", amount_in: 10, amount_out: 35, entry_price_usd: 3.5, timestamp: 2 },
+        { id: 3, mode: "simulation", from_asset: "TON", to_asset: "EQUnknownJetton", amount_in: 4, amount_out: 400, entry_price_usd: 3.5, timestamp: 3 },
+      ];
+      const sdk = makeSdk({
+        ton: {
+          getAddress: () => "EQTestWalletAddress",
+          getBalance: async () => ({ balance: "100.5" }),
+          getPrice: async () => ({ usd: 3.5 }),
+          getJettonBalances: async () => [],
+          dex: { quote: async () => null, swap: async () => null },
+        },
+        db: {
+          exec: () => {},
+          prepare: (sql) => ({
+            get: () => null,
+            all: () => (sql.includes("status = 'open'") ? openRows : []),
+            run: () => ({ lastInsertRowid: 1, changes: 1 }),
+          }),
+        },
+      });
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_portfolio_summary");
+      const result = await tool.execute({}, makeContext());
+
+      assert.equal(result.success, true);
+      // Aggregate unrealized P&L = +5 (A) + 0 (B); C is unvalued and excluded.
+      assert.equal(result.data.unrealized_pnl_usd, 5);
+      assert.equal(result.data.valued_open_positions, 2);
+      assert.equal(result.data.unvalued_open_positions, 1);
+      assert.equal(result.data.open_positions, 3);
+      // Exposure in TON: A bridges 30 USD / 3.5 = 8.5714, B = 10 TON, C = 4 TON.
+      assert.ok(
+        Math.abs(result.data.total_exposure_ton - (30 / 3.5 + 10 + 4)) < 1e-3,
+        `Unexpected exposure: ${result.data.total_exposure_ton}`
+      );
+      assert.equal(result.data.exposure_complete, true);
+      // Per-position: A is in profit, C cannot be valued.
+      const posA = result.data.open_trades.find((p) => p.trade_id === 1);
+      const posC = result.data.open_trades.find((p) => p.trade_id === 3);
+      assert.equal(posA.unrealized_pnl_usd, 5);
+      assert.ok(Math.abs(posA.unrealized_pnl_percent - 16.6667) < 1e-3);
+      assert.equal(posA.current_price_usd, 3.5);
+      assert.equal(posC.unrealized_pnl_usd, null);
+      assert.equal(posC.current_price_usd, null);
     });
   });
 
@@ -2570,6 +3581,31 @@ describe("ton-trading-bot plugin", () => {
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_order_book_depth");
       assert.ok(tool.parameters?.required?.includes("from_asset"));
       assert.ok(tool.parameters?.required?.includes("to_asset"));
+    });
+
+    it("reports a one-directional price spread, not a fake bid/ask spread (issue #182)", async () => {
+      const sdk = makeSdk();
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_get_order_book_depth");
+      const result = await tool.execute(
+        { from_asset: "TON", to_asset: "EQCxE6test" },
+        makeContext()
+      );
+      assert.equal(result.success, true);
+      // The tool only quotes one direction (from_asset → to_asset) at growing fill
+      // sizes, so it cannot form a real bid/ask spread (that needs opposing buy and
+      // sell quotes). It must expose the honest field name and NOT the misleading one.
+      assert.ok(
+        "price_spread_across_sizes" in result.data,
+        "expected the honest price_spread_across_sizes field"
+      );
+      assert.ok(
+        !("bid_ask_spread" in result.data),
+        "must not expose a fake bid_ask_spread field for one-directional quotes"
+      );
+      // With the fixed mock quote (output 10.5 at every size), effective price walks
+      // 10.5/amt, so the spread between the smallest and largest probe is non-null.
+      assert.equal(typeof result.data.price_spread_across_sizes, "number");
+      assert.ok(result.data.price_spread_across_sizes > 0);
     });
   });
 

@@ -1,7 +1,7 @@
 {
   "id": "ton-trading-bot",
   "name": "TON Trading Bot",
-  "version": "2.2.0",
+  "version": "2.4.0",
   "description": "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, risk management, and automation.",
   "author": {
     "name": "xlabtg",
@@ -66,7 +66,7 @@
     },
     {
       "name": "ton_trading_get_top_traders",
-      "description": "Find top-performing trader wallets on TON ranked by win rate and volume"
+      "description": "Find the most active, highest-volume trader wallets on TON ranked by USD volume and trade count"
     },
     {
       "name": "ton_trading_get_trader_performance",
@@ -113,6 +113,10 @@
       "description": "List pending scheduled trades and flag which ones are due for execution"
     },
     {
+      "name": "ton_trading_execute_scheduled_trade",
+      "description": "Execute a due scheduled trade and atomically mark it executed to prevent double-execution — DM only"
+    },
+    {
       "name": "ton_trading_reset_simulation_balance",
       "description": "Reset the simulation balance to a starting amount for a fresh paper-trading session"
     },
@@ -142,7 +146,7 @@
     },
     {
       "name": "ton_trading_get_order_book_depth",
-      "description": "Analyse order book depth, liquidity, and price impact for a token pair"
+      "description": "Analyse synthetic depth, liquidity, and price impact for a token pair from one-directional DEX quotes at increasing fill sizes (not a true bid/ask spread)"
     },
     {
       "name": "ton_trading_create_schedule",
