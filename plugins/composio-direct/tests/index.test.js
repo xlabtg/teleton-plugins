@@ -109,7 +109,7 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.8.0");
+    assert.equal(manifest.version, "1.9.0");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3");
     assert.deepEqual(
       toolList.map((tool) => tool.name).sort(),
@@ -260,7 +260,7 @@ describe("composio-direct Teleton integration", () => {
     }
   });
 
-  it("passes connected_account_id in HTTP body when provided", async () => {
+  it("passes connected_account_id as a top-level execute field, not inside arguments", async () => {
     const { calls, restore } = mockFetch(() => ({
       status: 200,
       data: {
@@ -274,7 +274,7 @@ describe("composio-direct Teleton integration", () => {
       const result = await executeTool.execute(
         {
           tool_slug: "COINMARKETCAP_CRYPTOCURRENCY_LISTINGS_LATEST",
-          parameters: {},
+          parameters: { symbol: "BTC" },
           connected_account_id: "ca_lc9TestLuaI",
         },
         makeContext({ senderId: "user-42" })
@@ -283,14 +283,20 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.success, true);
       assert.equal(calls[0].body.connected_account_id, "ca_lc9TestLuaI");
       assert.equal(calls[0].body.user_id, "user-42");
-      // connected_account_id must also be inside arguments so Composio API picks it up
-      assert.equal(calls[0].body.arguments.connected_account_id, "ca_lc9TestLuaI");
+      // connected_account_id is a top-level execute field per the Composio v3 API.
+      // It must NOT pollute the tool arguments, or strict tool schemas
+      // (additionalProperties: false) reject the call.
+      assert.deepEqual(calls[0].body.arguments, { symbol: "BTC" });
+      assert.equal(
+        Object.hasOwn(calls[0].body.arguments, "connected_account_id"),
+        false
+      );
     } finally {
       restore();
     }
   });
 
-  it("passes connected_account_id inside arguments for multi_execute HTTP body", async () => {
+  it("passes connected_account_id as a top-level field for multi_execute, not inside arguments", async () => {
     const { calls, restore } = mockFetch(() => ({
       status: 200,
       data: { successful: true, data: { ok: true } },
@@ -312,8 +318,12 @@ describe("composio-direct Teleton integration", () => {
       );
 
       assert.equal(result.success, true);
-      // connected_account_id must be inside arguments so Composio API picks it up
-      assert.equal(calls[0].body.arguments.connected_account_id, "ca_multi_inside");
+      // connected_account_id is a top-level execute field, never a tool argument.
+      assert.deepEqual(calls[0].body.arguments, { symbol: "BTC" });
+      assert.equal(
+        Object.hasOwn(calls[0].body.arguments, "connected_account_id"),
+        false
+      );
       assert.equal(calls[0].body.connected_account_id, "ca_multi_inside");
     } finally {
       restore();

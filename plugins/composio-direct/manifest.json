@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "Direct access to 1000+ Composio automation tools plus v3 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
   "author": {
     "name": "xlabtg",
