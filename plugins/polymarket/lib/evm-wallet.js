@@ -136,6 +136,10 @@ export class EvmWallet {
     const ts = String(timestamp ?? Math.floor(Date.now() / 1000));
     const message = `${ts}${method}${path}${body}`;
     const key = Buffer.from(secret, "base64url");
+    // HMAC-SHA256 — это обязательная схема подписи запросов Polymarket CLOB L2
+    // (идентична Coinbase Pro): подписывается строка запроса ключом API-секрета.
+    // Это НЕ хеширование пароля для хранения, поэтому правило CodeQL
+    // js/insufficient-password-hash (CWE-916) здесь — ложное срабатывание.
     const signature = createHmac("sha256", key).update(message).digest("base64url");
     return {
       POLY_ADDRESS: this.address,
