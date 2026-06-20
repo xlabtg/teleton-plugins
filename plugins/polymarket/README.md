@@ -44,6 +44,8 @@ Configured via Teleton secrets (never logged, never returned):
 | `POLY_API_PASSPHRASE` | ✅ | Polymarket CLOB API passphrase |
 | `CHANGENOW_API_KEY` | ✅ | ChangeNOW API key for the bridge |
 
+Detailed setup: [SECRETS.md](SECRETS.md).
+
 > Use a **fresh, dedicated** EVM key holding only your trading USDC. The withdraw
 > flow broadcasts an on-chain ERC‑20 transfer, so the EVM wallet also needs a
 > little **MATIC** for gas.
