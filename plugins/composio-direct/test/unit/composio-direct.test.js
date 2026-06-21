@@ -149,7 +149,7 @@ describe("manifest", () => {
     assert.ok(manifest.name, "manifest.name is set");
     assert.ok(manifest.version, "manifest.version is set");
     assert.ok(manifest.secrets?.composio_api_key, "secret composio_api_key declared");
-    assert.equal(manifest.version, "1.9.1");
+    assert.equal(manifest.version, "1.9.2");
     assert.equal(manifest.defaultConfig?.base_url, "https://backend.composio.dev/api/v3.1");
   });
 });
@@ -296,8 +296,13 @@ describe("composio_execute_tool", () => {
     }
   });
 
-  it("returns structured auth error when 401", async () => {
-    const restore = mockFetch([{ status: 401, data: { message: "Unauthorized" } }]);
+  it("returns structured auth error when Composio reports a missing connected account", async () => {
+    const restore = mockFetch([
+      {
+        status: 400,
+        data: { message: "No connected account found. Connect your GitHub account." },
+      },
+    ]);
 
     try {
       const sdk = makeSdk();

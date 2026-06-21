@@ -109,7 +109,7 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.9.1");
+    assert.equal(manifest.version, "1.9.2");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3.1");
     assert.deepEqual(
       toolList.map((tool) => tool.name).sort(),
@@ -425,6 +425,37 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.error, "auth_required");
       assert.equal(result.auth.service, "gemini");
       assert.equal(result.auth.connect_url, "https://connect.composio.dev/link/ln_xyz");
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not treat Composio API key permission failures as toolkit auth_required", async () => {
+    const { restore } = mockFetch(() => ({
+      status: 403,
+      data: {
+        error: {
+          message: "The API key doesn't have permissions to perform the request.",
+          slug: "HTTP_Forbidden",
+          status: 403,
+          request_id: "req_permission_denied",
+          suggested_fix: "Check the API key permissions or IP allowlist.",
+        },
+      },
+    }));
+
+    try {
+      const executeTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_execute_tool");
+      const result = await executeTool.execute(
+        { tool_slug: "github_list_repos", parameters: {} },
+        makeContext()
+      );
+
+      assert.equal(result.success, false);
+      assert.notEqual(result.error, "auth_required");
+      assert.equal(result.auth, undefined);
+      assert.match(result.error, /API key/i);
+      assert.match(result.error, /permissions/i);
     } finally {
       restore();
     }

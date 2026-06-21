@@ -121,10 +121,10 @@ describe("rate limit handling", () => {
 // ---------------------------------------------------------------------------
 
 describe("auth error flow", () => {
-  it("returns structured auth error with connect_url on 401", async () => {
+  it("returns structured auth error with connect_url when Composio reports a missing connected account", async () => {
     const restore = mockFetchFactory(async () => ({
-      status: 401,
-      data: { message: "Not authenticated. Connect your GitHub account." },
+      status: 400,
+      data: { message: "No connected account found. Connect your GitHub account." },
     }));
 
     try {
@@ -207,7 +207,7 @@ describe("multi-execute batching", () => {
   });
 
   it("stops after first failure with fail_fast=true", async () => {
-    // Return 401 (auth error) which is NOT retried, so the first tool definitely fails
+    // Return 401 (API-key error) which is NOT retried, so the first tool definitely fails
     let callCount = 0;
     const restore = mockFetchFactory(async () => {
       callCount++;

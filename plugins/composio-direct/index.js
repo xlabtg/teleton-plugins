@@ -64,7 +64,7 @@ const COMPOSIO_EXECUTION_GUIDANCE = {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.9.1",
+  version: "1.9.2",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools plus v3.1 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
@@ -187,12 +187,18 @@ async function fetchWithRetry({ url, method, headers, body, timeoutMs, log }) {
  * @returns {boolean}
  */
 function isAuthError(response) {
-  if (response.status === 401 || response.status === 403) return true;
   if (isAuthRequiredPayload(response.data)) return true;
+
+  // Composio reserves HTTP 401/403 for API-key authentication and permission
+  // failures. Toolkit OAuth/account authorization is returned through explicit
+  // auth_required payloads or connected-account messages instead.
+  if (response.status === 401 || response.status === 403) return false;
+
   const msg = getComposioMessage(response.data).toLowerCase();
   if (msg) {
     return (
-      msg.includes("auth") ||
+      msg.includes("auth_required") ||
+      msg.includes("authorization required") ||
       msg.includes("connect") ||
       msg.includes("connection") ||
       msg.includes("not connected") ||
@@ -201,6 +207,37 @@ function isAuthError(response) {
     );
   }
   return false;
+}
+
+/**
+ * Detect Composio API-key authentication/permission errors.
+ * @param {{ status: number; data: unknown }} response
+ * @returns {boolean}
+ */
+function isComposioApiAccessError(response) {
+  return response.status === 401 || response.status === 403;
+}
+
+/**
+ * Format Composio API-key authentication/permission failures with actionable
+ * guidance and without exposing the key.
+ * @param {{ status: number; data: unknown }} response
+ * @returns {string}
+ */
+function formatComposioApiAccessError(response) {
+  const message = getComposioMessage(response.data) || `HTTP ${response.status}`;
+  if (response.status === 403) {
+    return (
+      "Composio API key permission denied. Check that composio_api_key is a " +
+      "project API key with permissions for this endpoint and that any Composio " +
+      `IP allowlist includes this runtime. Composio response: ${message}`
+    );
+  }
+
+  return (
+    "Composio API key was rejected. Check that composio_api_key is a valid " +
+    `project API key. Composio response: ${message}`
+  );
 }
 
 /**
@@ -840,7 +877,9 @@ export const tools = (sdk) => {
   function failedResponse(action, response) {
     return {
       success: false,
-      error: getComposioMessage(response.data) || `${action}: HTTP ${response.status}`,
+      error: isComposioApiAccessError(response)
+        ? formatComposioApiAccessError(response)
+        : (getComposioMessage(response.data) || `${action}: HTTP ${response.status}`),
       data: {
         status: response.status,
       },
@@ -1023,7 +1062,9 @@ export const tools = (sdk) => {
           sdk.log.debug(`composio_search_tools: HTTP ${response.status}`);
           return {
             success: false,
-            error: `Composio API returned HTTP ${response.status}. Please check your API key and try again.`,
+            error: isComposioApiAccessError(response)
+              ? formatComposioApiAccessError(response)
+              : `Composio API returned HTTP ${response.status}. Please check your API key and try again.`,
           };
         }
 
@@ -1310,8 +1351,9 @@ export const tools = (sdk) => {
 
         if (response.status !== 200) {
           const errMsg =
-            getComposioMessage(response.data) ||
-            `HTTP ${response.status}`;
+            isComposioApiAccessError(response)
+              ? formatComposioApiAccessError(response)
+              : (getComposioMessage(response.data) || `HTTP ${response.status}`);
           sdk.log.debug(`composio_execute_tool: error response ${response.status}`);
           return { success: false, error: `Tool execution failed: ${errMsg}` };
         }
@@ -1509,7 +1551,9 @@ export const tools = (sdk) => {
             }
 
             if (response.status !== 200) {
-              const errMsg = getComposioMessage(response.data) || `HTTP ${response.status}`;
+              const errMsg = isComposioApiAccessError(response)
+                ? formatComposioApiAccessError(response)
+                : (getComposioMessage(response.data) || `HTTP ${response.status}`);
               results[globalIdx] = {
                 tool_slug: normalizedSlug,
                 success: false,

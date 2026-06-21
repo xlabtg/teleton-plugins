@@ -185,6 +185,8 @@ The plugin returns structured results:
 
 For `auth_required`, do not retry blindly. Generate or surface a connection link, wait for user confirmation, then retry. For validation errors, fetch the schema again and correct the parameters. For transient network or 5xx failures, the plugin already retries three times with exponential backoff.
 
+HTTP 401/403 from Composio indicates API key authentication or permission failure, not a missing external app connection. Do not call `composio_auth_link` for those errors; verify the `composio_api_key` project key, its endpoint permissions, and any Composio IP allowlist.
+
 ## Security Rules
 
 - Never ask the user to paste OAuth tokens or Composio API keys into chat.

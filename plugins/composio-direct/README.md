@@ -470,3 +470,4 @@ node --test plugins/composio-direct/test/unit/composio-direct.test.js \
 - Added Triggers API coverage through trigger type discovery, active trigger listing, trigger upsert, enable/disable, and delete endpoints.
 - Added Webhooks API coverage through event type discovery and webhook subscription CRUD/secret rotation endpoints.
 - Meta-tool alignment: `composio_search_tools`, `composio_get_tool_schemas`, `composio_multi_execute`, connection/auth tools, `composio_manage_connections`, `composio_remote_bash`, and `composio_remote_workbench` cover the practical `search_tools`, `get_tool_schemas`, `multi_execute_tool`, `manage_connections`, `remote_bash_tool`, and `remote_workbench` flows for Teleton.
+- HTTP 401/403 responses are reported as Composio API key access failures, not as `auth_required` service authorization. Check the project API key permissions and any Composio IP allowlist before retrying.
