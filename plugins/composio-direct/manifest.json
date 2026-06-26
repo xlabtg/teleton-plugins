@@ -1,7 +1,7 @@
 {
   "id": "composio-direct",
   "name": "Composio Direct",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "description": "Direct access to 1000+ Composio automation tools plus v3.1 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
   "author": {
     "name": "xlabtg",
@@ -15,7 +15,7 @@
     "composio_api_key": {
       "required": true,
       "env": "COMPOSIO_DIRECT_COMPOSIO_API_KEY",
-      "description": "Composio project or user API key (create at https://app.composio.dev/settings)"
+      "description": "Composio project, user, or organization API key (create at https://app.composio.dev/settings)"
     }
   },
   "defaultConfig": {

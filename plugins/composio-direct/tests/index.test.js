@@ -109,7 +109,7 @@ describe("composio-direct Teleton integration", () => {
     const sdk = makeSdk();
     const toolList = toolsFactory(sdk);
 
-    assert.equal(manifest.version, "1.9.3");
+    assert.equal(manifest.version, "1.9.4");
     assert.equal(manifest.defaultConfig.base_url, "https://backend.composio.dev/api/v3.1");
     assert.equal(manifest.defaultConfig.api_key_auth_scheme, "auto");
     assert.deepEqual(
@@ -181,6 +181,73 @@ describe("composio-direct Teleton integration", () => {
       const url = new URL(calls[0].url);
       assert.equal(url.searchParams.get("query"), "coinmarketcap");
       assert.equal(url.searchParams.has("search"), false);
+    } finally {
+      restore();
+    }
+  });
+
+  it("wraps SDK-style Composio tools as Teleton custom provider results", async () => {
+    const inputSchema = {
+      type: "object",
+      properties: {
+        owner: { type: "string" },
+        repo: { type: "string" },
+      },
+      required: ["owner", "repo"],
+      additionalProperties: false,
+    };
+    const outputSchema = {
+      type: "object",
+      properties: {
+        starred: { type: "boolean" },
+      },
+    };
+    const { restore } = mockFetch(() => ({
+      status: 200,
+      data: {
+        items: [
+          {
+            slug: "GITHUB_STAR_REPOSITORY",
+            name: "Star repository",
+            description: "Star a GitHub repository",
+            toolkit: { slug: "github", name: "GitHub" },
+            no_auth: false,
+            inputParameters: inputSchema,
+            outputParameters: outputSchema,
+          },
+        ],
+      },
+    }));
+
+    try {
+      const searchTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_search_tools");
+      const result = await searchTool.execute(
+        { toolkit: "github", limit: 1, include_params: true },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.execution.tool, "composio_execute_tool");
+      assert.deepEqual(result.data.tools, [
+        {
+          tool_slug: "GITHUB_STAR_REPOSITORY",
+          display_name: "Star repository",
+          description: "Star a GitHub repository",
+          toolkit: "github",
+          auth_required: true,
+          version: null,
+          tags: [],
+          execute_with: {
+            tool: "composio_execute_tool",
+            tool_slug: "GITHUB_STAR_REPOSITORY",
+            parameters_param: "parameters",
+          },
+          parameters_schema: inputSchema,
+          output_schema: outputSchema,
+        },
+      ]);
+      assert.equal(Object.hasOwn(result.data.tools[0], "name"), false);
+      assert.equal(Object.hasOwn(result.data.tools[0], "execute"), false);
     } finally {
       restore();
     }
@@ -505,6 +572,61 @@ describe("composio-direct Teleton integration", () => {
     }
   });
 
+  it("retries execute with x-org-api-key when project and user headers are rejected", async () => {
+    const { calls, restore } = mockFetch((call, idx) => {
+      if (idx === 1) {
+        assert.equal(call.headers["x-api-key"], "test-api-key");
+        assert.equal(call.headers["x-user-api-key"], undefined);
+        assert.equal(call.headers["x-org-api-key"], undefined);
+        return {
+          status: 403,
+          data: {
+            error: {
+              message: "The API key doesn't have permissions to perform the request.",
+              slug: "HTTP_Forbidden",
+              status: 403,
+            },
+          },
+        };
+      }
+
+      if (idx === 2) {
+        assert.equal(call.headers["x-api-key"], undefined);
+        assert.equal(call.headers["x-user-api-key"], "test-api-key");
+        assert.equal(call.headers["x-org-api-key"], undefined);
+        return {
+          status: 401,
+          data: { message: "Unauthorized" },
+        };
+      }
+
+      assert.equal(call.headers["x-api-key"], undefined);
+      assert.equal(call.headers["x-user-api-key"], undefined);
+      assert.equal(call.headers["x-org-api-key"], "test-api-key");
+      return {
+        status: 200,
+        data: {
+          successful: true,
+          data: { ok: true },
+        },
+      };
+    });
+
+    try {
+      const executeTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_execute_tool");
+      const result = await executeTool.execute(
+        { tool_slug: "github_list_repos", parameters: {} },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.ok, true);
+      assert.equal(calls.length, 3);
+    } finally {
+      restore();
+    }
+  });
+
   it("uses x-user-api-key first when api_key_auth_scheme is user", async () => {
     const { calls, restore } = mockFetch((call) => {
       assert.equal(call.headers["x-api-key"], undefined);
@@ -535,11 +657,43 @@ describe("composio-direct Teleton integration", () => {
     }
   });
 
-  it("keeps the actionable x-api-key 403 when x-user-api-key fallback is also rejected", async () => {
+  it("uses x-org-api-key first when api_key_auth_scheme is org", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      assert.equal(call.headers["x-api-key"], undefined);
+      assert.equal(call.headers["x-user-api-key"], undefined);
+      assert.equal(call.headers["x-org-api-key"], "test-api-key");
+      return {
+        status: 200,
+        data: {
+          successful: true,
+          data: { ok: true },
+        },
+      };
+    });
+
+    try {
+      const executeTool = toolsFactory(
+        makeSdk({ pluginConfig: { api_key_auth_scheme: "organization" } })
+      ).find((tool) => tool.name === "composio_execute_tool");
+      const result = await executeTool.execute(
+        { tool_slug: "github_list_repos", parameters: {} },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.ok, true);
+      assert.equal(calls.length, 1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("keeps the actionable x-api-key 403 when fallback headers are also rejected", async () => {
     const { calls, restore } = mockFetch((call, idx) => {
       if (idx === 1) {
         assert.equal(call.headers["x-api-key"], "test-api-key");
         assert.equal(call.headers["x-user-api-key"], undefined);
+        assert.equal(call.headers["x-org-api-key"], undefined);
         return {
           status: 403,
           data: {
@@ -552,8 +706,19 @@ describe("composio-direct Teleton integration", () => {
         };
       }
 
+      if (idx === 2) {
+        assert.equal(call.headers["x-api-key"], undefined);
+        assert.equal(call.headers["x-user-api-key"], "test-api-key");
+        assert.equal(call.headers["x-org-api-key"], undefined);
+        return {
+          status: 401,
+          data: { message: "Unauthorized" },
+        };
+      }
+
       assert.equal(call.headers["x-api-key"], undefined);
-      assert.equal(call.headers["x-user-api-key"], "test-api-key");
+      assert.equal(call.headers["x-user-api-key"], undefined);
+      assert.equal(call.headers["x-org-api-key"], "test-api-key");
       return {
         status: 401,
         data: { message: "Unauthorized" },
@@ -571,7 +736,36 @@ describe("composio-direct Teleton integration", () => {
       assert.equal(result.auth, undefined);
       assert.match(result.error, /permission denied/i);
       assert.match(result.error, /permissions/i);
-      assert.equal(calls.length, 2);
+      assert.equal(calls.length, 3);
+    } finally {
+      restore();
+    }
+  });
+
+  it("does not retry files API with user or organization headers", async () => {
+    const { calls, restore } = mockFetch((call) => {
+      assert.equal(call.headers["x-api-key"], "test-api-key");
+      assert.equal(call.headers["x-user-api-key"], undefined);
+      assert.equal(call.headers["x-org-api-key"], undefined);
+      return {
+        status: 403,
+        data: {
+          error: {
+            message: "Project API key required.",
+            slug: "HTTP_Forbidden",
+            status: 403,
+          },
+        },
+      };
+    });
+
+    try {
+      const listFiles = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_list_files");
+      const result = await listFiles.execute({ toolkit: "gmail" }, makeContext());
+
+      assert.equal(result.success, false);
+      assert.match(result.error, /Project API key required|permission denied/i);
+      assert.equal(calls.length, 1);
     } finally {
       restore();
     }
