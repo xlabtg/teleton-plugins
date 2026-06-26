@@ -186,6 +186,73 @@ describe("composio-direct Teleton integration", () => {
     }
   });
 
+  it("wraps SDK-style Composio tools as Teleton custom provider results", async () => {
+    const inputSchema = {
+      type: "object",
+      properties: {
+        owner: { type: "string" },
+        repo: { type: "string" },
+      },
+      required: ["owner", "repo"],
+      additionalProperties: false,
+    };
+    const outputSchema = {
+      type: "object",
+      properties: {
+        starred: { type: "boolean" },
+      },
+    };
+    const { restore } = mockFetch(() => ({
+      status: 200,
+      data: {
+        items: [
+          {
+            slug: "GITHUB_STAR_REPOSITORY",
+            name: "Star repository",
+            description: "Star a GitHub repository",
+            toolkit: { slug: "github", name: "GitHub" },
+            no_auth: false,
+            inputParameters: inputSchema,
+            outputParameters: outputSchema,
+          },
+        ],
+      },
+    }));
+
+    try {
+      const searchTool = toolsFactory(makeSdk()).find((tool) => tool.name === "composio_search_tools");
+      const result = await searchTool.execute(
+        { toolkit: "github", limit: 1, include_params: true },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.execution.tool, "composio_execute_tool");
+      assert.deepEqual(result.data.tools, [
+        {
+          tool_slug: "GITHUB_STAR_REPOSITORY",
+          display_name: "Star repository",
+          description: "Star a GitHub repository",
+          toolkit: "github",
+          auth_required: true,
+          version: null,
+          tags: [],
+          execute_with: {
+            tool: "composio_execute_tool",
+            tool_slug: "GITHUB_STAR_REPOSITORY",
+            parameters_param: "parameters",
+          },
+          parameters_schema: inputSchema,
+          output_schema: outputSchema,
+        },
+      ]);
+      assert.equal(Object.hasOwn(result.data.tools[0], "name"), false);
+      assert.equal(Object.hasOwn(result.data.tools[0], "execute"), false);
+    } finally {
+      restore();
+    }
+  });
+
   it("executes tools through current /tools/execute API with sender-scoped user_id", async () => {
     const { calls, restore } = mockFetch(() => ({
       status: 200,

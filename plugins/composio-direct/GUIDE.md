@@ -29,6 +29,18 @@ Default runtime settings:
 
 This order matters because Composio tool inputs vary by toolkit and version. Do not guess parameter names when `composio_get_tool_schemas` can confirm them.
 
+## Custom Provider And Sessions Alignment
+
+Composio's TypeScript custom provider docs define a provider as the adapter layer that transforms tool definitions, executes tool calls, and exposes platform helpers. Teleton already provides the agent tool registry, so `composio-direct` acts as the Teleton-specific direct provider over Composio REST instead of importing `@composio/core` provider classes at runtime.
+
+The mapping is:
+
+- Transform step: `composio_search_tools` and `composio_get_tool_schemas` convert Composio tool objects into Teleton-visible results with `tool_slug`, schemas, and `execute_with` guidance.
+- Execution step: `composio_execute_tool` and `composio_multi_execute` call the current Composio execute API with the sender-scoped `user_id`, tool `arguments`, optional `connected_account_id`, and selected tool version.
+- Provider helpers: auth, connection, toolkit, file, trigger, webhook, and remote meta-tool wrappers expose the supporting Composio flows an agent needs around execution.
+
+Composio sessions are the recommended SDK path for new agent integrations. `composio-direct` stays on the direct REST path because Teleton registers static plugin tools, this package must remain dependency-free, and trigger/webhook/file workflows still rely on direct API surfaces. If a future Teleton integration uses Tool Router sessions or MCP, keep it separate from the direct plugin so the current execution contract remains stable.
+
 ## Tool Discovery
 
 Call `composio_search_tools` when the user describes an action but not a specific Composio slug.
