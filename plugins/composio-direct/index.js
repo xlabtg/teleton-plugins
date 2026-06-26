@@ -20,8 +20,9 @@
  *
  * Authentication:
  *   - Requires a Composio API key stored in sdk.secrets as "composio_api_key"
- *   - Supports project API keys (x-api-key), user API keys (x-user-api-key),
- *     and organization API keys (x-org-api-key)
+ *   - Supports project API keys (x-api-key) and user API keys (x-user-api-key)
+ *     for tool/auth/connection endpoints. Organization API keys are valid only
+ *     for Composio organization-management endpoints and cannot execute tools.
  *   - Set COMPOSIO_DIRECT_COMPOSIO_API_KEY, COMPOSIO_API_KEY, or use the secrets store
  *
  * Transport:
@@ -67,7 +68,7 @@ const COMPOSIO_EXECUTION_GUIDANCE = {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.9.4",
+  version: "1.9.5",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools plus v3.1 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
@@ -76,7 +77,7 @@ export const manifest = {
       required: true,
       env: "COMPOSIO_DIRECT_COMPOSIO_API_KEY",
       description:
-        "Composio project, user, or organization API key (create at https://app.composio.dev/settings)",
+        "Composio project or user API key (create at https://app.composio.dev/settings)",
     },
   },
   defaultConfig: {
@@ -150,20 +151,94 @@ function getApiKeyHeaderName(apiKeyAuthScheme) {
 
 /**
  * Composio v3.1 accepts project keys on x-api-key and user keys on
- * x-user-api-key for most user-facing endpoints. Composio also exposes
- * organization keys on x-org-api-key for org-scoped access. In auto mode, try
- * the project header first to preserve existing behavior, then retry with
- * user and organization headers only when the endpoint is not project-only and
- * Composio rejected access.
+ * x-user-api-key for most user-facing endpoints. Organization keys on
+ * x-org-api-key are reserved for /org/* management endpoints in the OpenAPI
+ * schema and are not valid credentials for tool execution or discovery.
+ * In auto mode, infer known key prefixes first; for unknown/legacy key shapes,
+ * try project first to preserve existing behavior, then user when supported.
  * @param {"auto" | "project" | "user" | "org"} apiKeyAuthScheme
- * @param {boolean} supportsNonProjectApiKeys
+ * @param {boolean} supportsUserApiKeys
+ * @param {boolean} supportsOrgApiKeys
+ * @param {string} [apiKey]
  * @returns {Array<"project" | "user" | "org">}
  */
-function getApiKeyAuthAttempts(apiKeyAuthScheme, supportsNonProjectApiKeys) {
+function getApiKeyAuthAttempts(
+  apiKeyAuthScheme,
+  supportsUserApiKeys,
+  supportsOrgApiKeys,
+  apiKey
+) {
   if (apiKeyAuthScheme === "project") return ["project"];
-  if (apiKeyAuthScheme === "user") return ["user"];
-  if (apiKeyAuthScheme === "org") return ["org"];
-  return supportsNonProjectApiKeys ? ["project", "user", "org"] : ["project"];
+  if (apiKeyAuthScheme === "user") return supportsUserApiKeys ? ["user"] : [];
+  if (apiKeyAuthScheme === "org") return supportsOrgApiKeys ? ["org"] : [];
+
+  const detectedScheme = detectApiKeyAuthScheme(apiKey);
+  if (detectedScheme === "project") return ["project"];
+  if (detectedScheme === "user") return supportsUserApiKeys ? ["user"] : [];
+  if (detectedScheme === "org") return supportsOrgApiKeys ? ["org"] : [];
+
+  return supportsUserApiKeys ? ["project", "user"] : ["project"];
+}
+
+/**
+ * Infer Composio API-key kind from stable key prefixes described by Composio.
+ * Unknown shapes keep legacy project->user auto fallback behavior.
+ * @param {string | null | undefined} apiKey
+ * @returns {"project" | "user" | "org" | null}
+ */
+function detectApiKeyAuthScheme(apiKey) {
+  const key = String(apiKey ?? "").trim().toLowerCase();
+  if (key.startsWith("uak_")) return "user";
+  if (key.startsWith("oak_")) return "org";
+  if (key.startsWith("ak_")) return "project";
+  return null;
+}
+
+/**
+ * Build a local response when a configured key/header scheme is unsupported
+ * for the current Composio endpoint. This avoids a misleading remote 403.
+ * @param {"auto" | "project" | "user" | "org"} apiKeyAuthScheme
+ * @param {string} apiKey
+ * @param {boolean} supportsUserApiKeys
+ * @param {boolean} supportsOrgApiKeys
+ * @returns {{ status: number; data: unknown }}
+ */
+function unsupportedApiKeyAuthResponse(
+  apiKeyAuthScheme,
+  apiKey,
+  supportsUserApiKeys,
+  supportsOrgApiKeys
+) {
+  const detectedScheme = detectApiKeyAuthScheme(apiKey);
+  const scheme = apiKeyAuthScheme === "auto" ? detectedScheme : apiKeyAuthScheme;
+  let message =
+    "Configured Composio API key auth scheme is not supported by this endpoint.";
+  let suggestedFix =
+    "Use a Composio project API key (ak_...) for project-only endpoints, or a user API key (uak_...) for regular tool/auth/connection endpoints.";
+
+  if (scheme === "org") {
+    message =
+      "Composio organization API keys (oak_...) are only valid for organization-management endpoints and cannot execute or discover tools through composio-direct.";
+    suggestedFix =
+      "Set composio_api_key to a Composio project or user API key (ak_... or uak_...) for composio-direct tools.";
+  } else if (scheme === "user" && !supportsUserApiKeys) {
+    message =
+      "This Composio endpoint accepts only project API keys; the configured user API key cannot be used here.";
+    suggestedFix =
+      "Set composio_api_key to a Composio project API key (ak_...) for this endpoint.";
+  }
+
+  return {
+    status: 400,
+    data: {
+      error: {
+        message,
+        slug: "UNSUPPORTED_COMPOSIO_API_KEY_AUTH_SCHEME",
+        status: 400,
+        suggested_fix: suggestedFix,
+      },
+    },
+  };
 }
 
 /**
@@ -298,7 +373,7 @@ function formatComposioApiAccessError(response) {
   if (response.status === 403) {
     return (
       "Composio API key permission denied. Check that composio_api_key is a " +
-      "project, user, or organization API key with permissions for this endpoint, that " +
+      "project or user API key with permissions for this endpoint, that " +
       "api_key_auth_scheme matches the key type when set explicitly, and that " +
       `any Composio IP allowlist includes this runtime. Composio response: ${message}`
     );
@@ -306,7 +381,7 @@ function formatComposioApiAccessError(response) {
 
   return (
     "Composio API key was rejected. Check that composio_api_key is a valid " +
-    `project, user, or organization API key. Composio response: ${message}`
+    `project or user API key. Composio response: ${message}`
   );
 }
 
@@ -912,7 +987,7 @@ export const tools = (sdk) => {
     return {
       success: false,
       error:
-        "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your project, user, or organization key from https://app.composio.dev/settings",
+        "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your project or user key from https://app.composio.dev/settings",
     };
   }
 
@@ -925,6 +1000,8 @@ export const tools = (sdk) => {
    * @param {unknown} [opts.body]
    * @param {number} opts.timeoutMs
    * @param {boolean} [opts.supportsNonProjectApiKeys]
+   * @param {boolean} [opts.supportsUserApiKeys]
+   * @param {boolean} [opts.supportsOrgApiKeys]
    * @returns {Promise<{ status: number; data: unknown }>}
    */
   async function requestComposio({
@@ -933,13 +1010,26 @@ export const tools = (sdk) => {
     method,
     body,
     timeoutMs,
-    supportsNonProjectApiKeys = true,
+    supportsNonProjectApiKeys,
+    supportsUserApiKeys = supportsNonProjectApiKeys ?? true,
+    supportsOrgApiKeys = false,
   }) {
     const { apiKeyAuthScheme } = getConfig();
     const authAttempts = getApiKeyAuthAttempts(
       apiKeyAuthScheme,
-      supportsNonProjectApiKeys
+      supportsUserApiKeys,
+      supportsOrgApiKeys,
+      apiKey
     );
+
+    if (authAttempts.length === 0) {
+      return unsupportedApiKeyAuthResponse(
+        apiKeyAuthScheme,
+        apiKey,
+        supportsUserApiKeys,
+        supportsOrgApiKeys
+      );
+    }
 
     let response = null;
     let apiAccessErrorResponse = null;
@@ -986,6 +1076,8 @@ export const tools = (sdk) => {
    * @param {unknown} [opts.body]
    * @param {number} [opts.timeoutMs]
    * @param {boolean} [opts.supportsNonProjectApiKeys]
+   * @param {boolean} [opts.supportsUserApiKeys]
+   * @param {boolean} [opts.supportsOrgApiKeys]
    * @returns {Promise<{ status: number; data: unknown }>}
    */
   function callComposio({
@@ -995,7 +1087,9 @@ export const tools = (sdk) => {
     query,
     body,
     timeoutMs,
-    supportsNonProjectApiKeys = true,
+    supportsNonProjectApiKeys,
+    supportsUserApiKeys = supportsNonProjectApiKeys ?? true,
+    supportsOrgApiKeys = false,
   }) {
     const cfg = getConfig();
     return requestComposio({
@@ -1004,7 +1098,8 @@ export const tools = (sdk) => {
       method,
       body,
       timeoutMs: timeoutMs ?? cfg.timeoutMs,
-      supportsNonProjectApiKeys,
+      supportsUserApiKeys,
+      supportsOrgApiKeys,
     });
   }
 

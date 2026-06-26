@@ -28,7 +28,7 @@ Composio sessions are still the preferred SDK path for new agent integrations. T
 
 ## Setup
 
-1. Get your Composio project, user, or organization API key at <https://app.composio.dev/settings>
+1. Get your Composio project or user API key at <https://app.composio.dev/settings>
 2. Set the `composio_api_key` secret in Teleton:
 
 ```text
@@ -37,14 +37,16 @@ Composio sessions are still the preferred SDK path for new agent integrations. T
 
 For container and CI deployments, Teleton also resolves the secret from `COMPOSIO_DIRECT_COMPOSIO_API_KEY`. The plugin keeps `COMPOSIO_API_KEY` as a direct fallback for older deployments.
 
-By default `api_key_auth_scheme` is `auto`: the plugin sends the key as a project key (`x-api-key`) first and, for endpoints that accept non-project API keys, retries as `x-user-api-key` and then `x-org-api-key` on Composio 401/403 responses. Set it to `project`, `user`, or `org` only when you want to force a specific header. Project-only endpoints, such as Files and Webhooks, still use `x-api-key`.
+By default `api_key_auth_scheme` is `auto`: the plugin infers known Composio key prefixes (`ak_` for project keys, `uak_` for user keys) and sends the matching header first. For older or unknown key shapes, it keeps the legacy fallback from `x-api-key` to `x-user-api-key` on endpoints that support user keys. Project-only endpoints, such as Files and Webhooks, still use `x-api-key`.
+
+Organization API keys (`oak_`) are for Composio organization-management endpoints. They cannot execute, discover, authorize, or manage regular tools through `composio-direct`; configure a project or user API key for this plugin.
 
 ```yaml
 # config.yaml example
 plugins:
   composio_direct:
     base_url: "https://backend.composio.dev/api/v3.1"    # optional
-    api_key_auth_scheme: "auto"                          # optional (auto/project/user/org)
+    api_key_auth_scheme: "auto"                          # optional (auto/project/user)
     timeout_ms: 30000                                  # optional (default: 30s)
     max_parallel_executions: 10                        # optional (default: 10)
     tool_version: "latest"                             # optional
@@ -485,4 +487,4 @@ node --test plugins/composio-direct/test/unit/composio-direct.test.js \
 - Meta-tool alignment: `composio_search_tools`, `composio_get_tool_schemas`, `composio_multi_execute`, connection/auth tools, `composio_manage_connections`, `composio_remote_bash`, and `composio_remote_workbench` cover the practical `search_tools`, `get_tool_schemas`, `multi_execute_tool`, `manage_connections`, `remote_bash_tool`, and `remote_workbench` flows for Teleton.
 - Custom provider alignment: Teleton consumes the static plugin tools exported here, so the plugin implements the Composio provider transform/execute/helper contract over REST instead of importing `@composio/core` provider classes.
 - Sessions note: Composio recommends sessions for SDK agents, while this direct plugin keeps the explicit `/tools`, `/tools/execute`, auth, connection, trigger, webhook, and file routes available to Teleton.
-- HTTP 401/403 responses are reported as Composio API key access failures, not as `auth_required` service authorization. Check the project/user/org key type, `api_key_auth_scheme`, endpoint permissions, and any Composio IP allowlist before retrying.
+- HTTP 401/403 responses are reported as Composio API key access failures, not as `auth_required` service authorization. Check the project/user key type, `api_key_auth_scheme`, endpoint permissions, and any Composio IP allowlist before retrying.
