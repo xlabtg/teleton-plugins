@@ -4,14 +4,14 @@ Use `composio-direct` when a user asks Teleton to work with an external app supp
 
 ## Required Setup
 
-The plugin requires the Teleton secret `composio_api_key`, using either a Composio project API key or user API key. It can also be supplied through `COMPOSIO_DIRECT_COMPOSIO_API_KEY`, with `COMPOSIO_API_KEY` kept as a legacy fallback. If the key is missing, stop and ask the operator to configure it before attempting Composio calls.
+The plugin requires the Teleton secret `composio_api_key`, using a Composio project API key, user API key, or organization API key. It can also be supplied through `COMPOSIO_DIRECT_COMPOSIO_API_KEY`, with `COMPOSIO_API_KEY` kept as a legacy fallback. If the key is missing, stop and ask the operator to configure it before attempting Composio calls.
 
 Default runtime settings:
 
 | Setting | Default | Use |
 |---|---:|---|
 | `base_url` | `https://backend.composio.dev/api/v3.1` | Composio API endpoint |
-| `api_key_auth_scheme` | `auto` | API key header mode: `auto`, `project`, or `user` |
+| `api_key_auth_scheme` | `auto` | API key header mode: `auto`, `project`, `user`, or `org` |
 | `timeout_ms` | `30000` | Default request timeout |
 | `max_parallel_executions` | `10` | Batch execution concurrency |
 | `tool_version` | `latest` | Tool execution/schema version |
@@ -186,7 +186,7 @@ The plugin returns structured results:
 
 For `auth_required`, do not retry blindly. Generate or surface a connection link, wait for user confirmation, then retry. For validation errors, fetch the schema again and correct the parameters. For transient network or 5xx failures, the plugin already retries three times with exponential backoff.
 
-HTTP 401/403 from Composio indicates API key authentication or permission failure, not a missing external app connection. Do not call `composio_auth_link` for those errors; verify the `composio_api_key` key type, `api_key_auth_scheme`, endpoint permissions, and any Composio IP allowlist.
+HTTP 401/403 from Composio indicates API key authentication or permission failure, not a missing external app connection. Do not call `composio_auth_link` for those errors; verify the `composio_api_key` key type, `api_key_auth_scheme`, endpoint permissions, and any Composio IP allowlist. In `auto` mode, the plugin tries `x-api-key`, then `x-user-api-key`, then `x-org-api-key` on endpoints that are not project-only.
 
 ## Security Rules
 

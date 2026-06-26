@@ -20,7 +20,8 @@
  *
  * Authentication:
  *   - Requires a Composio API key stored in sdk.secrets as "composio_api_key"
- *   - Supports project API keys (x-api-key) and user API keys (x-user-api-key)
+ *   - Supports project API keys (x-api-key), user API keys (x-user-api-key),
+ *     and organization API keys (x-org-api-key)
  *   - Set COMPOSIO_DIRECT_COMPOSIO_API_KEY, COMPOSIO_API_KEY, or use the secrets store
  *
  * Transport:
@@ -66,7 +67,7 @@ const COMPOSIO_EXECUTION_GUIDANCE = {
 
 export const manifest = {
   name: "composio-direct",
-  version: "1.9.3",
+  version: "1.9.4",
   sdkVersion: ">=1.0.0",
   description:
     "Direct access to 1000+ Composio automation tools plus v3.1 toolkits, files, triggers, webhooks, connection reuse, and meta-tools without MCP transport",
@@ -75,7 +76,7 @@ export const manifest = {
       required: true,
       env: "COMPOSIO_DIRECT_COMPOSIO_API_KEY",
       description:
-        "Composio project or user API key (create at https://app.composio.dev/settings)",
+        "Composio project, user, or organization API key (create at https://app.composio.dev/settings)",
     },
   },
   defaultConfig: {
@@ -105,12 +106,11 @@ function sleep(ms) {
 /**
  * Build common headers for Composio API requests.
  * @param {string} apiKey
- * @param {"project" | "user"} [apiKeyAuthScheme]
+ * @param {"project" | "user" | "org"} [apiKeyAuthScheme]
  * @returns {Record<string, string>}
  */
 function buildHeaders(apiKey, apiKeyAuthScheme = "project") {
-  const apiKeyHeader =
-    apiKeyAuthScheme === "user" ? "x-user-api-key" : "x-api-key";
+  const apiKeyHeader = getApiKeyHeaderName(apiKeyAuthScheme);
   return {
     "Content-Type": "application/json",
     [apiKeyHeader]: apiKey,
@@ -120,7 +120,7 @@ function buildHeaders(apiKey, apiKeyAuthScheme = "project") {
 /**
  * Normalize API-key auth scheme config.
  * @param {unknown} value
- * @returns {"auto" | "project" | "user"}
+ * @returns {"auto" | "project" | "user" | "org"}
  */
 function normalizeApiKeyAuthScheme(value) {
   const scheme = String(value ?? DEFAULT_API_KEY_AUTH_SCHEME)
@@ -128,35 +128,42 @@ function normalizeApiKeyAuthScheme(value) {
     .toLowerCase()
     .replace(/_/g, "-");
 
-  if (scheme === "auto" || scheme === "project" || scheme === "user") {
+  if (scheme === "auto" || scheme === "project" || scheme === "user" || scheme === "org") {
     return scheme;
   }
+  if (scheme === "organization") return "org";
   if (scheme === "x-api-key") return "project";
   if (scheme === "x-user-api-key") return "user";
+  if (scheme === "x-org-api-key") return "org";
   return DEFAULT_API_KEY_AUTH_SCHEME;
 }
 
 /**
- * @param {"project" | "user"} apiKeyAuthScheme
- * @returns {"x-api-key" | "x-user-api-key"}
+ * @param {"project" | "user" | "org"} apiKeyAuthScheme
+ * @returns {"x-api-key" | "x-user-api-key" | "x-org-api-key"}
  */
 function getApiKeyHeaderName(apiKeyAuthScheme) {
-  return apiKeyAuthScheme === "user" ? "x-user-api-key" : "x-api-key";
+  if (apiKeyAuthScheme === "user") return "x-user-api-key";
+  if (apiKeyAuthScheme === "org") return "x-org-api-key";
+  return "x-api-key";
 }
 
 /**
  * Composio v3.1 accepts project keys on x-api-key and user keys on
- * x-user-api-key for most user-facing endpoints. In auto mode, try the
- * project header first to preserve existing behavior, then retry with the
- * user header only when the endpoint supports it and Composio rejected access.
- * @param {"auto" | "project" | "user"} apiKeyAuthScheme
- * @param {boolean} supportsUserApiKey
- * @returns {Array<"project" | "user">}
+ * x-user-api-key for most user-facing endpoints. Composio also exposes
+ * organization keys on x-org-api-key for org-scoped access. In auto mode, try
+ * the project header first to preserve existing behavior, then retry with
+ * user and organization headers only when the endpoint is not project-only and
+ * Composio rejected access.
+ * @param {"auto" | "project" | "user" | "org"} apiKeyAuthScheme
+ * @param {boolean} supportsNonProjectApiKeys
+ * @returns {Array<"project" | "user" | "org">}
  */
-function getApiKeyAuthAttempts(apiKeyAuthScheme, supportsUserApiKey) {
+function getApiKeyAuthAttempts(apiKeyAuthScheme, supportsNonProjectApiKeys) {
   if (apiKeyAuthScheme === "project") return ["project"];
   if (apiKeyAuthScheme === "user") return ["user"];
-  return supportsUserApiKey ? ["project", "user"] : ["project"];
+  if (apiKeyAuthScheme === "org") return ["org"];
+  return supportsNonProjectApiKeys ? ["project", "user", "org"] : ["project"];
 }
 
 /**
@@ -291,7 +298,7 @@ function formatComposioApiAccessError(response) {
   if (response.status === 403) {
     return (
       "Composio API key permission denied. Check that composio_api_key is a " +
-      "project or user API key with permissions for this endpoint, that " +
+      "project, user, or organization API key with permissions for this endpoint, that " +
       "api_key_auth_scheme matches the key type when set explicitly, and that " +
       `any Composio IP allowlist includes this runtime. Composio response: ${message}`
     );
@@ -299,7 +306,7 @@ function formatComposioApiAccessError(response) {
 
   return (
     "Composio API key was rejected. Check that composio_api_key is a valid " +
-    `project or user API key. Composio response: ${message}`
+    `project, user, or organization API key. Composio response: ${message}`
   );
 }
 
@@ -905,7 +912,7 @@ export const tools = (sdk) => {
     return {
       success: false,
       error:
-        "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your project or user key from https://app.composio.dev/settings",
+        "Composio API key is not configured. Please set the composio_api_key secret or COMPOSIO_DIRECT_COMPOSIO_API_KEY with your project, user, or organization key from https://app.composio.dev/settings",
     };
   }
 
@@ -917,7 +924,7 @@ export const tools = (sdk) => {
    * @param {string} opts.method
    * @param {unknown} [opts.body]
    * @param {number} opts.timeoutMs
-   * @param {boolean} [opts.supportsUserApiKey]
+   * @param {boolean} [opts.supportsNonProjectApiKeys]
    * @returns {Promise<{ status: number; data: unknown }>}
    */
   async function requestComposio({
@@ -926,10 +933,13 @@ export const tools = (sdk) => {
     method,
     body,
     timeoutMs,
-    supportsUserApiKey = true,
+    supportsNonProjectApiKeys = true,
   }) {
     const { apiKeyAuthScheme } = getConfig();
-    const authAttempts = getApiKeyAuthAttempts(apiKeyAuthScheme, supportsUserApiKey);
+    const authAttempts = getApiKeyAuthAttempts(
+      apiKeyAuthScheme,
+      supportsNonProjectApiKeys
+    );
 
     let response = null;
     let apiAccessErrorResponse = null;
@@ -975,7 +985,7 @@ export const tools = (sdk) => {
    * @param {URLSearchParams} [opts.query]
    * @param {unknown} [opts.body]
    * @param {number} [opts.timeoutMs]
-   * @param {boolean} [opts.supportsUserApiKey]
+   * @param {boolean} [opts.supportsNonProjectApiKeys]
    * @returns {Promise<{ status: number; data: unknown }>}
    */
   function callComposio({
@@ -985,7 +995,7 @@ export const tools = (sdk) => {
     query,
     body,
     timeoutMs,
-    supportsUserApiKey = true,
+    supportsNonProjectApiKeys = true,
   }) {
     const cfg = getConfig();
     return requestComposio({
@@ -994,7 +1004,7 @@ export const tools = (sdk) => {
       method,
       body,
       timeoutMs: timeoutMs ?? cfg.timeoutMs,
-      supportsUserApiKey,
+      supportsNonProjectApiKeys,
     });
   }
 
@@ -2301,7 +2311,7 @@ export const tools = (sdk) => {
           apiKey,
           path: "/files/list",
           query: qs,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (response.status !== 200) {
           return failedResponse("Could not list files", response);
@@ -2383,7 +2393,7 @@ export const tools = (sdk) => {
           path: "/files/upload/request",
           method: "POST",
           body,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
           return failedResponse("Could not request file upload", response);
@@ -2897,7 +2907,7 @@ export const tools = (sdk) => {
         const response = await callComposio({
           apiKey,
           path: "/webhook_subscriptions/event_types",
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (response.status !== 200) {
           return failedResponse("Could not list webhook event types", response);
@@ -2960,7 +2970,7 @@ export const tools = (sdk) => {
           apiKey,
           path: "/webhook_subscriptions",
           query: qs,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (response.status !== 200) {
           return failedResponse("Could not list webhook subscriptions", response);
@@ -3019,7 +3029,7 @@ export const tools = (sdk) => {
         const response = await callComposio({
           apiKey,
           path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (response.status !== 200 || !isRecord(response.data)) {
           return failedResponse(`Could not get webhook ${params.webhook_id}`, response);
@@ -3096,7 +3106,7 @@ export const tools = (sdk) => {
           path: "/webhook_subscriptions",
           method: "POST",
           body,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
           return failedResponse("Could not create webhook subscription", response);
@@ -3179,7 +3189,7 @@ export const tools = (sdk) => {
           path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
           method: "PATCH",
           body,
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (!isOkStatus(response.status, [200, 204]) || (response.status !== 204 && !isRecord(response.data))) {
           return failedResponse(`Could not update webhook ${params.webhook_id}`, response);
@@ -3238,7 +3248,7 @@ export const tools = (sdk) => {
           apiKey,
           path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}/rotate_secret`,
           method: "POST",
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (!isOkStatus(response.status, [200, 201]) || !isRecord(response.data)) {
           return failedResponse(`Could not rotate webhook ${params.webhook_id} secret`, response);
@@ -3289,7 +3299,7 @@ export const tools = (sdk) => {
           apiKey,
           path: `/webhook_subscriptions/${encodeURIComponent(params.webhook_id)}`,
           method: "DELETE",
-          supportsUserApiKey: false,
+          supportsNonProjectApiKeys: false,
         });
         if (!isOkStatus(response.status, [200, 204])) {
           return failedResponse(`Could not delete webhook ${params.webhook_id}`, response);

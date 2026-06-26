@@ -149,7 +149,7 @@ describe("manifest", () => {
     assert.ok(manifest.name, "manifest.name is set");
     assert.ok(manifest.version, "manifest.version is set");
     assert.ok(manifest.secrets?.composio_api_key, "secret composio_api_key declared");
-    assert.equal(manifest.version, "1.9.3");
+    assert.equal(manifest.version, "1.9.4");
     assert.equal(manifest.defaultConfig?.base_url, "https://backend.composio.dev/api/v3.1");
     assert.equal(manifest.defaultConfig?.api_key_auth_scheme, "auto");
   });
