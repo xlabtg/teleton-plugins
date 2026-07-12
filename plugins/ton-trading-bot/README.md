@@ -257,7 +257,7 @@ plugins:
 | `mode` | string | No | simulation | "real" or "simulation" |
 | `trigger_price_below` | number | No | — | Execute when price falls below this value |
 | `trigger_price_above` | number | No | — | Execute when price rises above this value |
-| `auto_close_at_profit_percent` | number | No | — | Auto-register take-profit rule after execution |
+| `auto_close_at_profit_percent` | number | No | — | Auto-register profit rule; TON→stablecoin accumulation triggers after this price drop, other pairs after a price rise |
 | `auto_stop_loss_percent` | number | No | — | Auto-register stop-loss rule after execution |
 
 ### `ton_trading_get_portfolio_summary`

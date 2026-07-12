@@ -2165,6 +2165,34 @@ describe("ton-trading-bot plugin", () => {
 
   // ── ton_trading_check_stop_loss ────────────────────────────────────────────
   describe("ton_trading_check_stop_loss", () => {
+    it("triggers an accumulation take-profit on a price drop, not a rise (issue #204)", async () => {
+      const rule = {
+        id: 204,
+        trade_id: 188,
+        entry_price: 1.795,
+        stop_loss_percent: 99,
+        take_profit_percent: 3,
+        profit_direction: "below",
+        trailing_stop: 0,
+        trailing_stop_percent: null,
+        peak_price: null,
+      };
+      const sdk = makeSdk({ dbRows: { stopLossRules: [rule] } });
+      const basePrepare = sdk.db.prepare.bind(sdk.db);
+      sdk.db.prepare = (sql) => sql.includes("FROM stop_loss_rules")
+        ? { all: () => [rule] }
+        : basePrepare(sql);
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_check_stop_loss");
+
+      const rise = await tool.execute({ current_price: 1.85, trade_id: 188 }, makeContext());
+      assert.equal(rise.data.triggered_rules.length, 0);
+
+      const drop = await tool.execute({ current_price: 1.74, trade_id: 188 }, makeContext());
+      assert.equal(drop.data.triggered_rules.length, 1);
+      assert.equal(drop.data.triggered_rules[0].action, "take_profit");
+      assert.equal(drop.data.triggered_rules[0].profit_direction, "below");
+    });
+
     it("required parameters include current_price", () => {
       const sdk = makeSdk();
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_check_stop_loss");
@@ -3220,6 +3248,38 @@ describe("ton-trading-bot plugin", () => {
 
   // ── ton_trading_auto_execute ────────────────────────────────────────────────
   describe("ton_trading_auto_execute", () => {
+    it("registers TON→USDT accumulation profit below the entry price (issue #204)", async () => {
+      let ruleValues = null;
+      const sdk = makeSdk({ dbRows: { lastInsertRowid: 10, simBalance: { balance: 500 } } });
+      const basePrepare = sdk.db.prepare.bind(sdk.db);
+      sdk.db.prepare = (sql) => {
+        if (sql.includes("INSERT INTO stop_loss_rules")) {
+          return {
+            run: (...args) => {
+              ruleValues = args;
+              return { lastInsertRowid: 91, changes: 1 };
+            },
+          };
+        }
+        return basePrepare(sql);
+      };
+      const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");
+      const result = await tool.execute(
+        {
+          from_asset: "TON",
+          to_asset: "USDT",
+          amount: 5,
+          mode: "simulation",
+          auto_close_at_profit_percent: 3,
+        },
+        makeContext()
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.risk_rules[0].profit_direction, "below");
+      assert.equal(ruleValues[5], "below");
+    });
+
     it("executes simulation trade when no trigger conditions set", async () => {
       const sdk = makeSdk({ dbRows: { lastInsertRowid: 10, simBalance: { balance: 500 } } });
       const tool = mod.tools(sdk).find((t) => t.name === "ton_trading_auto_execute");

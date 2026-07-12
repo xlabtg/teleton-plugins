@@ -79,7 +79,7 @@
 
 export const manifest = {
   name: "ton-trading-bot",
-  version: "2.4.1",
+  version: "2.4.2",
   sdkVersion: ">=1.0.0",
   description: "Atomic TON trading tools: market data, portfolio, risk validation, simulation, DEX swap execution, cross-DEX arbitrage, sniper trading, copy trading, liquidity pools, farming, backtesting, and risk management.",
   defaultConfig: {
@@ -131,7 +131,8 @@ export function migrate(db) {
       status TEXT NOT NULL DEFAULT 'active',  -- 'active' | 'triggered' | 'cancelled'
       trailing_stop INTEGER NOT NULL DEFAULT 0,        -- 1 if trailing stop is active
       trailing_stop_percent REAL,                      -- trailing offset below peak price
-      peak_price REAL                                  -- highest price seen (for trailing stop)
+      peak_price REAL,                                 -- highest price seen (for trailing stop)
+      profit_direction TEXT NOT NULL DEFAULT 'above'   -- 'above' for long, 'below' for accumulation
     );
 
     -- Scheduled trades: pending orders for future execution
@@ -156,6 +157,7 @@ export function migrate(db) {
     "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE stop_loss_rules ADD COLUMN trailing_stop_percent REAL",
     "ALTER TABLE stop_loss_rules ADD COLUMN peak_price REAL",
+    "ALTER TABLE stop_loss_rules ADD COLUMN profit_direction TEXT NOT NULL DEFAULT 'above'",
     // Links an executed scheduled trade to the trade_journal row it produced, so
     // a DCA/grid order can never be silently re-executed (issue #182).
     "ALTER TABLE scheduled_trades ADD COLUMN trade_id INTEGER",
@@ -329,7 +331,7 @@ async function inferExitPriceUsd(sdk, fromAsset, explicitExitPriceUsd) {
   return inferAssetPriceUsd(sdk, fromAsset);
 }
 
-function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
+function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note, options = {}) {
   const amountIn = toFiniteNumber(entry.amount_in) ?? 0;
   const amountOutNumber = toFiniteNumber(amountOut);
   const entryPriceUsd = toFiniteNumber(entry.entry_price_usd);
@@ -339,14 +341,20 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
     return { success: false, error: "Closing amount_out is required to record P&L" };
   }
 
-  // P&L must be computed from two values in the SAME unit (issue #182). We never
+  // P&L must be computed from two values in the SAME unit (issues #182, #204).
+  // A completed reverse swap is a round trip, so amount_out is back in
+  // from_asset units and token accumulation is the authoritative result.
+  // Manual journal closes retain the price-based mode for compatibility when
+  // they do not prove that the supplied amount_out came from a reverse swap.
+  // We never
   // mix a USD-priced leg with a raw-token leg — that produced nonsense such as
   // +$7.39 / +73.89% on a flat TON/USDT trade. Two unit-safe modes:
   //   1. Price-based USD P&L — needs BOTH the entry and exit USD price of the
   //      base (from_asset): pnl = base_amount * (exit_price - entry_price).
-  //   2. Raw same-unit diff — backward-compatible fallback when prices are
-  //      unavailable; only meaningful when amount_in and amount_out share a unit.
-  const priceBased = entryPriceUsd != null && exitPrice != null;
+  //   2. Raw same-unit diff — used for a confirmed round trip, or as the
+  //      backward-compatible fallback when prices are unavailable.
+  const roundTrip = options.roundTrip === true;
+  const priceBased = !roundTrip && entryPriceUsd != null && exitPrice != null;
   let pnl;
   let pnlPercent;
   if (priceBased) {
@@ -399,6 +407,7 @@ function closeTradeJournalEntry(sdk, entry, amountOut, exitPriceUsd, note) {
       amount_out: amountOutNumber,
       pnl: parseFloat(pnl.toFixed(6)),
       pnl_percent: parseFloat(pnlPercent.toFixed(2)),
+      pnl_asset: roundTrip ? entry.from_asset : (priceBased ? "USD" : entry.from_asset),
       profit_or_loss: pnl >= 0 ? "profit" : "loss",
       mode: entry.mode,
       status: "closed",
@@ -694,7 +703,8 @@ async function closeOpenPosition(sdk, entry, params, context) {
     entry,
     closeAmountOut,
     exitPriceUsd,
-    note ?? "closed by ton_trading_close_position"
+    note ?? "closed by ton_trading_close_position",
+    { roundTrip: true }
   );
 
   if (!closeResult.success) return closeResult;
@@ -2553,8 +2563,13 @@ export const tools = (sdk) => [
 
           // The plain stop-loss level is always based on entry price, regardless of trailing.
           const plainStopLossPrice = rule.entry_price * (1 - rule.stop_loss_percent / 100);
+          const profitDirection = rule.profit_direction === "below" ? "below" : "above";
           const takeProfitPrice = rule.take_profit_percent != null
-            ? rule.entry_price * (1 + rule.take_profit_percent / 100)
+            ? rule.entry_price * (
+                profitDirection === "below"
+                  ? 1 - rule.take_profit_percent / 100
+                  : 1 + rule.take_profit_percent / 100
+              )
             : null;
 
           // When trailing stop is active the effective stop price is the trailing floor
@@ -2568,7 +2583,11 @@ export const tools = (sdk) => [
           // For plain rules:    take_profit fires when price reaches the static target.
           const takeProfitHit = rule.trailing_stop
             ? trailingStopPrice != null && current_price <= trailingStopPrice && !stopLossHit
-            : takeProfitPrice != null && current_price >= takeProfitPrice;
+            : takeProfitPrice != null && (
+                profitDirection === "below"
+                  ? current_price <= takeProfitPrice
+                  : current_price >= takeProfitPrice
+              );
 
           const annotated = {
             rule_id: rule.id,
@@ -2579,6 +2598,7 @@ export const tools = (sdk) => [
             take_profit_price: takeProfitPrice != null ? parseFloat(takeProfitPrice.toFixed(6)) : null,
             stop_loss_percent: rule.stop_loss_percent,
             take_profit_percent: rule.take_profit_percent ?? null,
+            profit_direction: profitDirection,
             stop_loss_hit: stopLossHit,
             take_profit_hit: takeProfitHit,
             trailing_stop: rule.trailing_stop === 1,
@@ -3245,7 +3265,7 @@ export const tools = (sdk) => [
         },
         auto_close_at_profit_percent: {
           type: "number",
-          description: "Automatically register a take-profit rule after execution at this profit %",
+          description: "Automatically register a profit rule. For TON→stablecoin accumulation it triggers after this price drop; otherwise after a price rise.",
           minimum: 0.1,
         },
         auto_stop_loss_percent: {
@@ -3409,14 +3429,21 @@ export const tools = (sdk) => [
         if (auto_close_at_profit_percent != null || auto_stop_loss_percent != null) {
           const stopLossPct = auto_stop_loss_percent ?? 99;
           const tpPct = auto_close_at_profit_percent ?? null;
+          const profitDirection = from_asset === "TON" && isStablecoin(to_asset) ? "below" : "above";
           const ruleId = sdk.db
             .prepare(
-              `INSERT INTO stop_loss_rules (trade_id, stop_loss_percent, take_profit_percent, entry_price, created_at)
-               VALUES (?, ?, ?, ?, ?)`
+              `INSERT INTO stop_loss_rules
+                 (trade_id, stop_loss_percent, take_profit_percent, entry_price, created_at, profit_direction)
+               VALUES (?, ?, ?, ?, ?, ?)`
             )
-            .run(tradeResult.trade_id, stopLossPct, tpPct, currentPrice ?? amount, Date.now())
+            .run(tradeResult.trade_id, stopLossPct, tpPct, currentPrice ?? amount, Date.now(), profitDirection)
             .lastInsertRowid;
-          rules.push({ rule_id: ruleId, stop_loss_percent: stopLossPct, take_profit_percent: tpPct });
+          rules.push({
+            rule_id: ruleId,
+            stop_loss_percent: stopLossPct,
+            take_profit_percent: tpPct,
+            profit_direction: profitDirection,
+          });
         }
 
         sdk.log.info(`Auto-executed trade #${tradeResult.trade_id}: ${amount} ${from_asset} → ${to_asset}`);

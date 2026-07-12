@@ -229,6 +229,39 @@ describe("ton-trading-bot position-management API (issue #188)", () => {
   });
 
   describe("ton_trading_close_position", () => {
+    it("scores a TON→USDT accumulation close by TON received, not by TON/USD movement (issue #204)", async () => {
+      const db = makeStatefulDb([
+        openTrade({
+          id: 188,
+          mode: "simulation",
+          from_asset: "TON",
+          to_asset: "USDT",
+          amount_in: 10,
+          amount_out: 17.95,
+          entry_price_usd: 1.795,
+        }),
+      ]);
+      const sdk = makeSdk({
+        db,
+        ton: {
+          ...makeSdk().ton,
+          getPrice: async () => ({ usd: 1.6412, source: "mock", timestamp: 1 }),
+          dex: {
+            quote: async () => ({ stonfi: { output: "10.93" }, recommended: "stonfi" }),
+            swap: async () => null,
+          },
+        },
+      });
+      const tool = findTool(sdk, "ton_trading_close_position");
+      const result = await tool.execute({ trade_id: 188, mode: "simulation" }, makeContext());
+
+      assert.equal(result.success, true);
+      assert.equal(result.data.pnl, 0.93);
+      assert.equal(result.data.pnl_percent, 9.3);
+      assert.equal(result.data.pnl_asset, "TON");
+      assert.equal(result.data.profit_or_loss, "profit");
+    });
+
     it("transitions a simulation position from 'open' to 'closed'", async () => {
       const db = makeStatefulDb([openTrade({ id: 7, mode: "simulation" })]);
       const tool = findTool(makeSdk({ db }), "ton_trading_close_position");
@@ -255,6 +288,46 @@ describe("ton-trading-bot position-management API (issue #188)", () => {
       const result = await tool.execute({ trade_id: 999, mode: "simulation" }, makeContext());
       assert.equal(result.success, false);
       assert.match(result.error, /not found/i);
+    });
+
+    it("returns a simulation position to open when the reverse quote fails", async () => {
+      const db = makeStatefulDb([openTrade({ id: 9, mode: "simulation" })]);
+      const sdk = makeSdk({
+        db,
+        ton: {
+          ...makeSdk().ton,
+          dex: {
+            quote: async () => { throw new Error("quote unavailable"); },
+            swap: async () => null,
+          },
+        },
+      });
+      const tool = findTool(sdk, "ton_trading_close_position");
+      const result = await tool.execute({ trade_id: 9, mode: "simulation" }, makeContext());
+
+      assert.equal(result.success, false);
+      assert.match(result.error, /quote unavailable/);
+      assert.equal(db._trades.find((t) => t.id === 9).status, "open");
+    });
+
+    it("marks a real position close_failed when reverse-swap state is unknown", async () => {
+      const db = makeStatefulDb([openTrade({ id: 13, mode: "real" })]);
+      const sdk = makeSdk({
+        db,
+        ton: {
+          ...makeSdk().ton,
+          dex: {
+            quote: async () => null,
+            swap: async () => { throw new Error("network lost after submit"); },
+          },
+        },
+      });
+      const tool = findTool(sdk, "ton_trading_close_position");
+      const result = await tool.execute({ trade_id: 13, mode: "real" }, makeContext());
+
+      assert.equal(result.success, false);
+      assert.match(result.error, /network lost after submit/);
+      assert.equal(db._trades.find((t) => t.id === 13).status, "close_failed");
     });
   });
 
